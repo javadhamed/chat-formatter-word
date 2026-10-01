@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Builds ChatFormatter.dotm from the VBA sources in src/.
 
