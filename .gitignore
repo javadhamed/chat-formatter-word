@@ -1,0 +1,13 @@
+# Build output that should never be committed
+*.tmp
+~$*.dotm
+~$*.doc*
+tools/out/
+
+# The .dotm IS committed on purpose - it is what users download.
+# Only ignore build intermediates if you add any.
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store
