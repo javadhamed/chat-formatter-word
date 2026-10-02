@@ -18,6 +18,17 @@ Option Explicit
 '  ToggleAutoFormat.
 '=======================================================================
 
+' Module state used by the responsiveness helpers (BeginRun/EndRun/Beat)
+' further down. These must sit here, in the declarations section above the
+' first procedure: VBA drops module level declarations that appear after
+' procedure bodies when the module is injected through the VBE object
+' model, which then reports every use of them as "Variable not defined".
+Private mBusy As Boolean
+Private mQuiet As Boolean
+Private mBeatCount As Long
+Private mTotalSteps As Long
+Private mDoneSteps As Long
+
 Public Const CF_VERSION As String = "1.0.0"
 Public Const CF_TOOLBAR As String = "ChatFormatterToolbar"
 
@@ -36,6 +47,9 @@ Private mBullet As String
 Public Sub FormatChatText()
     Dim doc As Document
     Dim rng As Range
+    Dim stored As String
+    Dim doTables As Boolean
+    Dim resp As VbMsgBoxResult
 
     If Documents.Count = 0 Then
         MsgBox "No document is open.", vbExclamation, "Chat Formatter"
@@ -43,12 +57,22 @@ Public Sub FormatChatText()
     End If
     Set doc = ActiveDocument
 
-    Dim resp As VbMsgBoxResult
-    resp = MsgBox( _
-        "Convert TSV and Pipe tables to Word tables too?" & vbCrLf & vbCrLf & _
-        "Yes = Markdown formatting + tables" & vbCrLf & _
-        "No = Markdown formatting only", _
-        vbYesNo + vbQuestion, "Chat Formatter")
+    ' Ask only until the answer has been stored. FormatSelection and
+    ' CF_RightClickHandler already read this key, so a run from the button
+    ' used to prompt every single time while the others stayed silent.
+    ' GetSetting (not GetSettingCore) swallows the missing-key error.
+    stored = GetSetting("Tables", "")
+    If Len(stored) = 0 Then
+        resp = MsgBox( _
+            "Convert TSV and Pipe tables to Word tables too?" & vbCrLf & vbCrLf & _
+            "Yes = Markdown formatting + tables" & vbCrLf & _
+            "No = Markdown formatting only" & vbCrLf & vbCrLf & _
+            "This choice is remembered; change it later in the settings.", _
+            vbYesNo + vbQuestion, "Chat Formatter")
+        stored = IIf(resp = vbYes, "1", "0")
+        SetSetting "Tables", stored
+    End If
+    doTables = (stored = "1")
 
     Set rng = doc.Content
 
@@ -58,7 +82,7 @@ Public Sub FormatChatText()
         Exit Sub
     End If
 
-    FormatRangeCore doc, rng, (resp = vbYes)
+    FormatRangeCore doc, rng, doTables
 End Sub
 
 
@@ -166,11 +190,15 @@ End Sub
 
 Public Sub ShowSettings()
     Dim autoFmt As String, tables As String
-    If GetSetting("AutoFormat", "1") = "1" Then autoFmt = "Enabled"
-    Else autoFmt = "Disabled"
+    If GetSetting("AutoFormat", "1") = "1" Then
+        autoFmt = "Enabled"
+    Else
+        autoFmt = "Disabled"
     End If
-    If GetSetting("Tables", "1") = "1" Then tables = "Enabled"
-    Else tables = "Disabled"
+    If GetSetting("Tables", "1") = "1" Then
+        tables = "Enabled"
+    Else
+        tables = "Disabled"
     End If
     MsgBox "Chat Formatter " & CF_VERSION & vbCrLf & vbCrLf & _
            "Auto-format (right-click): " & autoFmt & vbCrLf & _
@@ -265,15 +293,70 @@ Private Function LooksLikeAIChat(ByVal s As String) As Boolean
 End Function
 
 
-Public Sub CF_SilentTest()
+' Diagnostic entry point. Runs the full pipeline on the active document
+' without any MsgBox and records the outcome (including any runtime error)
+' to %TEMP%\ChatFormatterDiag.txt so a headless test can read the result
+' instead of blocking on a modal dialog.
+Public Sub CF_Diag()
     Dim doc As Document
     Dim rng As Range
-    If Documents.Count = 0 Then Exit Sub
+    Dim f As Integer
+    Dim t As Single
+    Dim path As String
+    Dim failed As Boolean
+    Dim errNum As Long, errDesc As String
+
+    path = Environ$("TEMP") & "\ChatFormatterDiag.txt"
+    On Error Resume Next
+    f = FreeFile
+    Open path For Output As #f
+    Close #f
+    On Error GoTo 0
+
+    If Documents.Count = 0 Then
+        AppendDiag path, "No document open."
+        Exit Sub
+    End If
+
     Set doc = ActiveDocument
     Set rng = doc.Content
-    silentMode = True
+    mQuiet = True
+    AppendDiag path, "Before: paragraphs=" & doc.Paragraphs.Count & _
+                   " tables=" & doc.Tables.Count
+
+    t = Timer
+    On Error GoTo Failed
     FormatRangeCore doc, rng, True
-    silentMode = False
+    failed = False
+    GoTo Report
+
+Failed:
+    failed = True
+    errNum = Err.Number
+    errDesc = Err.Description
+
+Report:
+    mQuiet = False
+    AppendDiag path, "Elapsed=" & Format$(Timer - t, "0.0") & "s"
+    AppendDiag path, "After: paragraphs=" & doc.Paragraphs.Count & _
+                   " tables=" & doc.Tables.Count
+    If failed Then
+        AppendDiag path, "ERROR " & errNum & ": " & errDesc
+    Else
+        AppendDiag path, "No error."
+    End If
+End Sub
+
+
+Private Sub AppendDiag(ByVal path As String, ByVal line As String)
+    Dim f As Integer
+    On Error Resume Next
+    f = FreeFile
+    Open path For Append As #f
+    Print #f, line
+    Close #f
+    Err.Clear
+    On Error GoTo 0
 End Sub
 
 
@@ -286,12 +369,6 @@ End Sub
 '  status bar. mBusy stops a re-entrant right-click (possible now that the
 '  UI thread is being pumped) from starting a second pass mid-format.
 '-----------------------------------------------------------------------
-
-Private mBusy As Boolean
-Private mBeatCount As Long
-Private mTotalSteps As Long
-Private mDoneSteps As Long
-
 
 Private Sub BeginRun(ByVal totalSteps As Long)
     mBusy = True
@@ -314,13 +391,18 @@ End Sub
 
 Private Sub StepDone(ByVal label As String)
     mDoneSteps = mDoneSteps + 1
+    ' Force a repaint at every stage boundary, not just every 40th hit,
+    ' so the progress text is always current when a stage is slow.
+    mBeatCount = 39
     Beat label
 End Sub
 
 
 ' Lets Word repaint and process input every ~40 paragraph visits.
+' The re-entrancy guard lives in the entry points (RunStageCore and
+' CF_RightClickHandler), NOT here: mBusy is true for the whole run, so
+' testing it here would suppress every DoEvents and freeze the window.
 Private Sub Beat(ByVal label As String)
-    If mBusy Then Exit Sub
     mBeatCount = mBeatCount + 1
     If mBeatCount < 40 Then Exit Sub
     mBeatCount = 0
@@ -332,9 +414,13 @@ Private Sub Beat(ByVal label As String)
     Else
         Application.StatusBar = "Chat Formatter: " & label & " ..."
     End If
-    DoEvents
     Err.Clear
     On Error GoTo 0
+
+    ' Pump the message queue last, unprotected, so Word keeps painting and
+    ' the mouse/keyboard stay live. Anything the user triggers meanwhile is
+    ' rejected by the guard at the top of RunStageCore.
+    DoEvents
 End Sub
 
 
@@ -435,6 +521,8 @@ CleanUp:
     End If
 
     EndRun
+
+    If mQuiet Then Exit Sub
 
     If failed Then
         MsgBox "Error during formatting:" & vbCrLf & _
