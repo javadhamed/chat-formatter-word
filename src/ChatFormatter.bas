@@ -1,4 +1,4 @@
-﻿Option Explicit
+Option Explicit
 
 '=======================================================================
 '  Chat Formatter for Word
@@ -25,29 +25,6 @@ Public Const CF_TOOLBAR As String = "ChatFormatterToolbar"
 ' and renders as garbage; 0x2022 is the real Unicode bullet.
 Private mBullet As String
 
-' Set by CF_TestFormatRange so FormatRangeCore suppresses its dialogs.
-Private silentMode As Boolean
-
-' Last error seen by FormatRangeCore. Kept in a module variable rather
-' than a document variable: touching a template's variables can raise a
-' modal save prompt, which would hang an automated run.
-Private mLastError As String
-Private mStage As String
-
-
-Private Sub SetLastError(ByVal errNum As Long, ByVal errDesc As String)
-    If errNum = 0 Then
-        mLastError = ""
-    Else
-        mLastError = CStr(errNum) & "|" & errDesc
-    End If
-End Sub
-
-
-Public Function CF_GetLastError() As String
-    CF_GetLastError = mLastError
-End Function
-
 
 '-----------------------------------------------------------------------
 '  Public API
@@ -61,23 +38,23 @@ Public Sub FormatChatText()
     Dim rng As Range
 
     If Documents.Count = 0 Then
-        MsgBox "??? ???? ??? ????.", vbExclamation, "Chat Formatter"
+        MsgBox "هیچ سندی باز نیست.", vbExclamation, "Chat Formatter"
         Exit Sub
     End If
     Set doc = ActiveDocument
 
     Dim resp As VbMsgBoxResult
     resp = MsgBox( _
-        "??? ???????? ??????? (TSV ? Pipe) ?? ?? ???? Word ????? ?????" & vbCrLf & vbCrLf & _
-        "???  = Markdown + ???????" & vbCrLf & _
-        "??? = ??? Markdown", _
+        "آیا جدول‌های TSV یا Pipe را هم به جدول Word تبدیل کنم؟" & vbCrLf & vbCrLf & _
+        "بله = قالب‌بندی Markdown + جدول‌ها" & vbCrLf & _
+        "خیر = فقط قالب‌بندی Markdown", _
         vbYesNo + vbQuestion, "Chat Formatter")
 
     Set rng = doc.Content
 
     If Not RangeNeedsFormatting(rng) Then
-        MsgBox "??? ??? ?? ??? ????????? ??? ???." & vbCrLf & _
-               "??? ?????? ???? ????.", vbInformation, "Chat Formatter"
+        MsgBox "متن انتخاب‌شده نیاز به قالب‌بندی ندارد." & vbCrLf & _
+               "متن تمیز و مرتب است.", vbInformation, "Chat Formatter"
         Exit Sub
     End If
 
@@ -87,86 +64,42 @@ End Sub
 
 Public Sub FormatSelection()
     Dim doc As Document
-    If Documents.Count = 0 Then
-        MsgBox "??? ???? ??? ????.", vbExclamation, "Chat Formatter"
-        Exit Sub
-    End If
-    Set doc = ActiveDocument
-
-    If doc.Selection.Range.Start = doc.Selection.Range.End Then
-        MsgBox "????? ??? ???? ??? ?? ?????? ????.", vbInformation, "Chat Formatter"
-        Exit Sub
-    End If
-
-    If Not RangeNeedsFormatting(doc.Selection.Range) Then
-        MsgBox "??? ??? ?? ??? ????????? ??? ???." & vbCrLf & _
-               "??? ?????? ???? ????.", vbInformation, "Chat Formatter"
-        Exit Sub
-    End If
-
-    FormatRangeCore doc, doc.Selection.Range, (GetSetting("Tables", "1") = "1")
-End Sub
-
-
-' Silent entry point used by tools\test.ps1. Same behaviour as
-' FormatChatText but with no dialogs, so automated runs cannot hang.
-Public Sub CF_TestFormatRange()
-    Dim doc As Document
-
-    TraceStage "ENTRY CF_TestFormatRange"
-    If Documents.Count = 0 Then Exit Sub
-    Set doc = ActiveDocument
-
-    silentMode = True
-    On Error Resume Next
-    If doc.Selection.Range.Start = doc.Selection.Range.End Then
-        Set doc.Content.Select
-    End If
-    Err.Clear
-    On Error GoTo 0
-
-    FormatRangeCore doc, doc.Content, True
-
-    silentMode = False
-End Sub
-
-
-' Runs exactly one stage so the test harness can call them in order and see
-' which one wedges Word, instead of waiting on a single opaque call.
-Public Sub CF_TestStage(ByVal n As Long)
-    Dim doc As Document
     Dim rng As Range
-
-    TraceStage "stage " & n
-    If Documents.Count = 0 Then Exit Sub
+    If Documents.Count = 0 Then
+        MsgBox "هیچ سندی باز نیست.", vbExclamation, "Chat Formatter"
+        Exit Sub
+    End If
     Set doc = ActiveDocument
-    Set rng = doc.Content
 
-    silentMode = True
-    On Error Resume Next
-    EnsureBullet
-    Err.Clear
-    On Error GoTo 0
+    ' Use the current selection when Word is visible and a real selection
+    ' exists. In headless/COM contexts Application.Selection can hang, so
+    ' fall back to the whole document content.
+    If Application.Visible Then
+        On Error Resume Next
+        Set rng = Selection.Range
+        If Err.Number <> 0 Or rng Is Nothing Then
+            Err.Clear
+            Set rng = doc.Content
+        ElseIf rng.Start = rng.End Then
+            Set rng = doc.Content
+        End If
+        On Error GoTo 0
+    Else
+        Set rng = doc.Content
+    End If
 
-    Select Case n
-        Case 1: ConvertPipeTablesToTable doc, rng
-        Case 2: ConvertTSVToTable doc, rng
-        Case 3: RemoveHorizontalRules doc, rng
-        Case 4: ConvertCodeBlocks doc, rng
-        Case 5: ConvertHeadings doc, rng
-        Case 6: FormatBold doc, rng
-        Case 7: FormatItalic doc, rng
-        Case 8: FormatStrike doc, rng
-        Case 9: FormatInlineCode doc, rng
-        Case 10: FormatLinks doc, rng
-        Case 11: ConvertBlockquotes doc, rng
-        Case 12: ConvertBulletLists doc, rng
-        Case 13: ConvertNumberedLists doc, rng
-        Case 14: CleanStrayMarkers doc, rng
-    End Select
+    If rng Is Nothing Then
+        MsgBox "هیچ سندی برای قالب‌بندی وجود ندارد.", vbExclamation, "Chat Formatter"
+        Exit Sub
+    End If
 
-    silentMode = False
-    TraceStage "stage " & n & " done"
+    If Not RangeNeedsFormatting(rng) Then
+        MsgBox "متن انتخاب‌شده نیاز به قالب‌بندی ندارد." & vbCrLf & _
+               "متن تمیز و مرتب است.", vbInformation, "Chat Formatter"
+        Exit Sub
+    End If
+
+    FormatRangeCore doc, rng, (GetSetting("Tables", "1") = "1")
 End Sub
 
 
@@ -219,13 +152,13 @@ Public Sub ToggleAutoFormat()
     v = GetSetting("AutoFormat", "1")
     If v Then
         SetSetting "AutoFormat", "0"
-        MsgBox "???? ?????? ??????? ??." & vbCrLf & _
-                     "???? ????????? ??????: Alt+F8 ? ToggleAutoFormat", _
+        MsgBox "حالت قالب‌بندی خودکار غیرفعال شد." & vbCrLf & _
+                     "برای فعال‌سازی دوباره: Alt+F8 و سپس ToggleAutoFormat", _
                   vbInformation, "Chat Formatter"
     Else
         SetSetting "AutoFormat", "1"
-        MsgBox "???? ?????? ???? ??." & vbCrLf & _
-                     "???? ??? AI ?? ??? ??? ?? Word ?????? ? ????????? ??.", _
+        MsgBox "حالت قالب‌بندی خودکار فعال شد." & vbCrLf & _
+                     "متن AI را در Word انتخاب و راست‌کلیک کنید تا خودکار قالب‌بندی شود.", _
                   vbInformation, "Chat Formatter"
     End If
 End Sub
@@ -233,16 +166,16 @@ End Sub
 
 Public Sub ShowSettings()
     Dim autoFmt As String, tables As String
-    If GetSetting("AutoFormat", "1") = "1" Then autoFmt = "????"
-    Else autoFmt = "???????"
+    If GetSetting("AutoFormat", "1") = "1" Then autoFmt = "فعال"
+    Else autoFmt = "غیرفعال"
     End If
-    If GetSetting("Tables", "1") = "1" Then tables = "????"
-    Else tables = "???????"
+    If GetSetting("Tables", "1") = "1" Then tables = "فعال"
+    Else tables = "غیرفعال"
     End If
     MsgBox "Chat Formatter " & CF_VERSION & vbCrLf & vbCrLf & _
-           "???? ?????? (?????????): " & autoFmt & vbCrLf & _
-           "????? ????: " & tables & vbCrLf & vbCrLf & _
-           "????? ???????:", _
+           "قالب‌بندی خودکار (راست‌کلیک): " & autoFmt & vbCrLf & _
+           "تبدیل جدول: " & tables & vbCrLf & vbCrLf & _
+           "منوی ابزار:", _
            vbInformation, "Chat Formatter Settings"
 End Sub
 
@@ -345,18 +278,6 @@ Private Sub FormatRangeCore(ByVal doc As Document, ByVal rng As Range, ByVal doT
 End Sub
 
 
-' mStage records the last stage that started, so a hung or failed run can be
-' diagnosed from outside instead of guessing.
-Public Function CF_GetStage() As String
-    CF_GetStage = mStage
-End Function
-
-
-' Appends a timestamped trace line. Used only by the test harness; if a
-' stage wedges Word the trace on disk still shows how far it got.
-Private Sub TraceStage(ByVal msg As String)
-    ' Tracing disabled to avoid file I/O issues during automated runs
-End Sub
 
 
 Private Sub RunStageCore(ByVal doc As Document, ByVal rng As Range, ByVal doTables As Boolean)
@@ -365,71 +286,36 @@ Private Sub RunStageCore(ByVal doc As Document, ByVal rng As Range, ByVal doTabl
     Dim failed As Boolean
     Dim errNum As Long, errDesc As String
 
-    mStage = "EnsureBullet"
 
-    TraceStage "EnsureBullet"
     EnsureBullet
 
     su = Application.ScreenUpdating
     Application.ScreenUpdating = False
 
     On Error Resume Next
-    Application.UndoRecord.StartCustomRecord "Chat Formatter"
-    If Err.Number = 0 Then undoStarted = True
+    undoStarted = False
     Err.Clear
     On Error GoTo CleanUp
 
-    mStage = "Tables"
 
-    TraceStage "Tables"
     If doTables Then
-        mStage = "PipeTables"
-        TraceStage "PipeTables"
         ConvertPipeTablesToTable doc, rng
-        mStage = "TSVTables"
-        TraceStage "TSVTables"
         ConvertTSVToTable doc, rng
     End If
 
-    mStage = "HorizontalRules"
 
-    TraceStage "HorizontalRules"
     RemoveHorizontalRules doc, rng
-    mStage = "CodeBlocks"
-    TraceStage "CodeBlocks"
     ConvertCodeBlocks doc, rng
-    mStage = "Headings"
-    TraceStage "Headings"
     ConvertHeadings doc, rng
-    mStage = "Bold"
-    TraceStage "Bold"
     FormatBold doc, rng
-    mStage = "Italic"
-    TraceStage "Italic"
     FormatItalic doc, rng
-    mStage = "Strike"
-    TraceStage "Strike"
     FormatStrike doc, rng
-    mStage = "InlineCode"
-    TraceStage "InlineCode"
     FormatInlineCode doc, rng
-    mStage = "Links"
-    TraceStage "Links"
     FormatLinks doc, rng
-    mStage = "Blockquotes"
-    TraceStage "Blockquotes"
     ConvertBlockquotes doc, rng
-    mStage = "Bullets"
-    TraceStage "Bullets"
     ConvertBulletLists doc, rng
-    mStage = "Numbered"
-    TraceStage "Numbered"
     ConvertNumberedLists doc, rng
-    mStage = "StrayMarkers"
-    TraceStage "StrayMarkers"
     CleanStrayMarkers doc, rng
-    mStage = "Done"
-    TraceStage "Done"
 
 CleanUp:
     failed = (Err.Number <> 0)
@@ -437,27 +323,17 @@ CleanUp:
     errDesc = Err.Description
 
     On Error Resume Next
-    If undoStarted Then Application.UndoRecord.EndCustomRecord
-    Err.Clear
     Application.ScreenUpdating = su
     Err.Clear
     On Error GoTo 0
 
-    ' Automated runs (tools\test.ps1) set silentMode so a modal dialog can
-    ' never block the Word instance and hang the test. The error is still
-    ' published to a document variable so the harness can read it.
-    If silentMode Then
-        SetLastError errNum, errDesc
-        Exit Sub
-    End If
-
     If failed Then
-        MsgBox "??? ?? ?????? ???:" & vbCrLf & _
-               errDesc & vbCrLf & "????? ???: " & errNum & vbCrLf & vbCrLf & _
-               "???? ?????: Ctrl+Z", vbExclamation, "Chat Formatter"
+        MsgBox "خطا در اجرا:" & vbCrLf & _
+               errDesc & vbCrLf & "کد خطا: " & errNum & vbCrLf & vbCrLf & _
+               "بازگشت: Ctrl+Z", vbExclamation, "Chat Formatter"
     Else
-        MsgBox "?????? ??? ?? ?????? ????? ??!" & vbCrLf & _
-               "(???? ?????: Ctrl+Z)", vbInformation, "Chat Formatter"
+        MsgBox "قالب‌بندی با موفقیت انجام شد!" & vbCrLf & _
+               "(بازگشت: Ctrl+Z)", vbInformation, "Chat Formatter"
     End If
 End Sub
 
@@ -470,8 +346,8 @@ Private Sub RemoveHorizontalRules(ByVal doc As Document, ByVal rng As Range)
     Dim k As Long, p As Paragraph
     Dim t As String, body As String
 
-    For k = rng.Paragraphs.Count To 1 Step -1
-        Set p = rng.Paragraphs(k)
+    For k = doc.Paragraphs.Count To 1 Step -1
+        Set p = doc.Paragraphs(k)
         t = CleanParaText(p.Range.Text)
         body = Replace(Replace(t, "-", ""), "*", "")
         body = Replace(body, "_", "")
@@ -497,11 +373,11 @@ Private Sub ConvertCodeBlocks(ByVal doc As Document, ByVal rng As Range)
     inCode = False
     openIdx = 0
 
-    For i = rng.Paragraphs.Count To 1 Step -1
+    For i = doc.Paragraphs.Count To 1 Step -1
         guard = guard + 1
         If guard > 20000 Then Exit For
 
-        If InStr(rng.Paragraphs(i).Range.Text, "```") > 0 Then
+        If InStr(doc.Paragraphs(i).Range.Text, "```") > 0 Then
             If Not inCode Then
                 openIdx = i
                 inCode = True
@@ -509,7 +385,7 @@ Private Sub ConvertCodeBlocks(ByVal doc As Document, ByVal rng As Range)
                 ' opening fence = openIdx, closing fence = i
                 For j = openIdx + 1 To i - 1
                     On Error Resume Next
-                    With rng.Paragraphs(j).Range
+                    With doc.Paragraphs(j).Range
                         .Font.Name = "Consolas"
                         .Font.Size = 10
                         .Font.Color = RGB(45, 45, 45)
@@ -525,10 +401,10 @@ Private Sub ConvertCodeBlocks(ByVal doc As Document, ByVal rng As Range)
                 Next j
 
                 On Error Resume Next
-                rng.Paragraphs(openIdx).Range.Shading.BackgroundPatternColor = wdColorAutomatic
-                rng.Paragraphs(i).Range.Shading.BackgroundPatternColor = wdColorAutomatic
-                rng.Paragraphs(openIdx).Range.Delete
-                rng.Paragraphs(i - 1).Range.Delete
+                doc.Paragraphs(openIdx).Range.Shading.BackgroundPatternColor = wdColorAutomatic
+                doc.Paragraphs(i).Range.Shading.BackgroundPatternColor = wdColorAutomatic
+                doc.Paragraphs(openIdx).Range.Delete
+                doc.Paragraphs(i - 1).Range.Delete
                 Err.Clear
                 On Error GoTo 0
 
@@ -541,8 +417,8 @@ Private Sub ConvertCodeBlocks(ByVal doc As Document, ByVal rng As Range)
     ' Unterminated fence: strip the marker, leave the text as normal body.
     If inCode And openIdx > 0 Then
         On Error Resume Next
-        rng.Paragraphs(openIdx).Range.Shading.BackgroundPatternColor = wdColorAutomatic
-        rng.Paragraphs(openIdx).Range.Delete
+        doc.Paragraphs(openIdx).Range.Shading.BackgroundPatternColor = wdColorAutomatic
+        doc.Paragraphs(openIdx).Range.Delete
         Err.Clear
         On Error GoTo 0
     End If
@@ -560,8 +436,8 @@ Private Sub ConvertHeadings(ByVal doc As Document, ByVal rng As Range)
     Dim txt As String
     Dim prevTxt As String
 
-    For k = rng.Paragraphs.Count To 1 Step -1
-        Set p = rng.Paragraphs(k)
+    For k = doc.Paragraphs.Count To 1 Step -1
+        Set p = doc.Paragraphs(k)
         Set r = p.Range
         If r.End > r.Start Then
             If r.Characters.Last.Text = Chr(13) Then r.MoveEnd wdCharacter, -1
@@ -586,7 +462,7 @@ Private Sub ConvertHeadings(ByVal doc As Document, ByVal rng As Range)
                 ' Setext: previous paragraph is a heading candidate and this
                 ' line is all = or all -
                 prevTxt = ""
-                If k < rng.Paragraphs.Count Then prevTxt = CleanParaText(rng.Paragraphs(k + 1).Range.Text)
+                If k < doc.Paragraphs.Count Then prevTxt = CleanParaText(doc.Paragraphs(k + 1).Range.Text)
                 If Len(prevTxt) > 0 And Len(txt) >= 2 Then
                     If IsAllOf(txt, "=") Then
                         ApplyHeading doc, p, r, prevTxt, wdStyleHeading1
@@ -714,8 +590,8 @@ Private Sub ConvertBlockquotes(ByVal doc As Document, ByVal rng As Range)
     Dim r As Range
     Dim txt As String
 
-    For k = rng.Paragraphs.Count To 1 Step -1
-        Set p = rng.Paragraphs(k)
+    For k = doc.Paragraphs.Count To 1 Step -1
+        Set p = doc.Paragraphs(k)
         Set r = p.Range
         If r.End > r.Start Then
             If r.Characters.Last.Text = Chr(13) Then r.MoveEnd wdCharacter, -1
@@ -754,8 +630,8 @@ Private Sub ConvertBulletLists(ByVal doc As Document, ByVal rng As Range)
 
     EnsureBullet
 
-    For k = rng.Paragraphs.Count To 1 Step -1
-        Set p = rng.Paragraphs(k)
+    For k = doc.Paragraphs.Count To 1 Step -1
+        Set p = doc.Paragraphs(k)
         Set r = p.Range
         If r.End > r.Start Then
             If r.Characters.Last.Text = Chr(13) Then r.MoveEnd wdCharacter, -1
@@ -797,8 +673,8 @@ Private Sub ConvertNumberedLists(ByVal doc As Document, ByVal rng As Range)
     Dim body As String
     Dim isRtl As Boolean
 
-    For k = rng.Paragraphs.Count To 1 Step -1
-        Set p = rng.Paragraphs(k)
+    For k = doc.Paragraphs.Count To 1 Step -1
+        Set p = doc.Paragraphs(k)
         Set r = p.Range
         If r.End > r.Start Then
             If r.Characters.Last.Text = Chr(13) Then r.MoveEnd wdCharacter, -1
@@ -862,20 +738,20 @@ Private Sub ConvertPipeTablesToTable(ByVal doc As Document, ByVal rng As Range)
     Dim guard As Long
 
     i = 1
-    Do While i <= rng.Paragraphs.Count
+    Do While i <= doc.Paragraphs.Count
         guard = guard + 1
         If guard > 20000 Then Exit Do
 
-        rowText = CleanParaText(rng.Paragraphs(i).Range.Text)
+        rowText = CleanParaText(doc.Paragraphs(i).Range.Text)
 
-        If IsPipeRow(rowText) And i + 1 <= rng.Paragraphs.Count Then
-            sepText = CleanParaText(rng.Paragraphs(i + 1).Range.Text)
+        If IsPipeRow(rowText) And i + 1 <= doc.Paragraphs.Count Then
+            sepText = CleanParaText(doc.Paragraphs(i + 1).Range.Text)
             If IsSeparatorLine(sepText) Then
                 startIdx = i
                 endIdx = i + 1
                 j = i + 2
-                Do While j <= rng.Paragraphs.Count
-                    rowText = CleanParaText(rng.Paragraphs(j).Range.Text)
+                Do While j <= doc.Paragraphs.Count
+                    rowText = CleanParaText(doc.Paragraphs(j).Range.Text)
                     If IsPipeRow(rowText) Then
                         endIdx = j
                         j = j + 1
@@ -884,33 +760,27 @@ Private Sub ConvertPipeTablesToTable(ByVal doc As Document, ByVal rng As Range)
                     End If
                 Loop
 
-                rows = endIdx - startIdx          ' header + data rows
-                cols = PipeColumnCount(rng.Paragraphs(startIdx).Range.Text)
+                rows = endIdx - startIdx
+                cols = PipeColumnCount(doc.Paragraphs(startIdx).Range.Text)
 
                 If rows >= 1 And cols >= 2 Then
-                    ' Snapshot every cell before touching the document, so
-                    ' index shifts from the deletion cannot corrupt the data.
                     ReDim data(0 To rows - 1, 0 To cols - 1)
-                    Dim cells As String()
                     For j = 0 To rows - 1
-                        cells = SplitPipeRow(rng.Paragraphs(startIdx + j).Range.Text, cols)
+                        Dim cells() As String
+                        cells = SplitPipeRow(doc.Paragraphs(startIdx + j).Range.Text, cols)
                         Dim c As Long
                         For c = 0 To cols - 1
                             data(j, c) = cells(c)
                         Next c
                     Next j
 
-                    ' Delete the block, then build the table from the snapshot.
                     Dim blockStart As Long
                     Dim blockRange As Range
-                    blockStart = rng.Paragraphs(startIdx).Range.Start
-                    Set blockRange = doc.Range( _
-                        Start:=blockStart, _
-                        End:=rng.Paragraphs(endIdx).Range.End)
+                    blockStart = doc.Paragraphs(startIdx).Range.Start
+                    Set blockRange = doc.Range(Start:=blockStart, End:=doc.Paragraphs(endIdx).Range.End)
                     blockRange.Delete
 
                     BuildTableFromData doc, blockStart, data, rows, cols
-
                     i = startIdx + 1
                 Else
                     i = i + 1
@@ -1018,18 +888,17 @@ Private Sub ConvertTSVToTable(ByVal doc As Document, ByVal rng As Range)
     Dim startIdx As Long, endIdx As Long
     Dim paraText As String
     Dim maxTabs As Long, curTabs As Long
-    Dim blockParas As Long
     Dim data() As String
     Dim rows As Long, cols As Long
     Dim r As Range
     Dim guard As Long
 
     i = 1
-    Do While i <= rng.Paragraphs.Count
+    Do While i <= doc.Paragraphs.Count
         guard = guard + 1
         If guard > 20000 Then Exit Do
 
-        paraText = rng.Paragraphs(i).Range.Text
+        paraText = doc.Paragraphs(i).Range.Text
         curTabs = CountChar(paraText, vbTab)
 
         If curTabs >= 1 And Len(Trim(paraText)) > 1 Then
@@ -1037,8 +906,8 @@ Private Sub ConvertTSVToTable(ByVal doc As Document, ByVal rng As Range)
             maxTabs = curTabs
             endIdx = i
             j = i + 1
-            Do While j <= rng.Paragraphs.Count
-                paraText = rng.Paragraphs(j).Range.Text
+            Do While j <= doc.Paragraphs.Count
+                paraText = doc.Paragraphs(j).Range.Text
                 curTabs = CountChar(paraText, vbTab)
                 If curTabs >= 1 And Len(Trim(paraText)) > 1 Then
                     If curTabs > maxTabs Then maxTabs = curTabs
@@ -1054,24 +923,21 @@ Private Sub ConvertTSVToTable(ByVal doc As Document, ByVal rng As Range)
 
             If rows >= 1 And cols >= 2 Then
                 ReDim data(0 To rows - 1, 0 To cols - 1)
-                Dim cells As String()
                 For j = 0 To rows - 1
-                    cells = SplitByTab(rng.Paragraphs(startIdx + j).Range.Text, cols)
+                    Dim cells() As String
+                    cells = SplitByTab(doc.Paragraphs(startIdx + j).Range.Text, cols)
                     Dim c As Long
                     For c = 0 To cols - 1
                         data(j, c) = cells(c)
                     Next c
                 Next j
 
-                Set r = doc.Range( _
-                    Start:=rng.Paragraphs(startIdx).Range.Start, _
-                    End:=rng.Paragraphs(endIdx).Range.End)
                 Dim blockStart As Long
-                blockStart = rng.Paragraphs(startIdx).Range.Start
+                blockStart = doc.Paragraphs(startIdx).Range.Start
+                Set r = doc.Range(Start:=blockStart, End:=doc.Paragraphs(endIdx).Range.End)
                 r.Delete
 
                 BuildTableFromData doc, blockStart, data, rows, cols
-
                 i = startIdx + 1
             Else
                 i = i + 1
@@ -1187,9 +1053,9 @@ Private Sub CreateToolbarButton(ByVal notify As Boolean)
     cb.Visible = True
 
     If notify Then
-        MsgBox "???? ""Format Chat Text"" ?? ???? ????? ????? ??." & vbCrLf & _
-               "???? ??? ?? ?? ?? ??? ??? ?? Word ?????? ? ????????? ?? " & _
-               "(?? Alt+F8 ? FormatChatText ?? ???? ??).", _
+        MsgBox "دکمه ""Format Chat Text"" روی نوار ابزار اضافه شد." & vbCrLf & _
+               "می‌توانید از این دکمه یا از منوی راست‌کلیک برای قالب‌بندی استفاده کنید " & _
+               "(یا Alt+F8 و سپس FormatChatText).", _
                vbInformation, "Chat Formatter"
     End If
 End Sub
@@ -1241,8 +1107,6 @@ Private Function IsSeparatorLine(ByVal s As String) As Boolean
     Next k
     IsSeparatorLine = hasDash
 End Function
-
-
 
 
 Private Function CountChar(ByVal s As String, ByVal ch As String) As Long
