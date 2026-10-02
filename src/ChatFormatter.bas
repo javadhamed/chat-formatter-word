@@ -223,6 +223,7 @@ Public Sub CF_RightClickHandler(ByVal Target As Range)
     Dim rng As Range
 
     If busy Then Exit Sub
+    If mBusy Then Exit Sub
     If GetSetting("AutoFormat", "1") <> "1" Then Exit Sub
     If Documents.Count = 0 Then Exit Sub
     If Target Is Nothing Then Exit Sub
@@ -277,6 +278,67 @@ End Sub
 
 
 '-----------------------------------------------------------------------
+'  Responsiveness helpers
+'
+'  The formatter runs on the Word UI thread, so a long pass would freeze the
+'  window. Beat is called from inside the paragraph loops: it hands control
+'  back to Windows every few dozen paragraphs and shows progress on the
+'  status bar. mBusy stops a re-entrant right-click (possible now that the
+'  UI thread is being pumped) from starting a second pass mid-format.
+'-----------------------------------------------------------------------
+
+Private mBusy As Boolean
+Private mBeatCount As Long
+Private mTotalSteps As Long
+Private mDoneSteps As Long
+
+
+Private Sub BeginRun(ByVal totalSteps As Long)
+    mBusy = True
+    mBeatCount = 0
+    mTotalSteps = totalSteps
+    mDoneSteps = 0
+End Sub
+
+
+Private Sub EndRun()
+    mBusy = False
+    mDoneSteps = 0
+    mTotalSteps = 0
+    On Error Resume Next
+    Application.StatusBar = False
+    Err.Clear
+    On Error GoTo 0
+End Sub
+
+
+Private Sub StepDone(ByVal label As String)
+    mDoneSteps = mDoneSteps + 1
+    Beat label
+End Sub
+
+
+' Lets Word repaint and process input every ~40 paragraph visits.
+Private Sub Beat(ByVal label As String)
+    If mBusy Then Exit Sub
+    mBeatCount = mBeatCount + 1
+    If mBeatCount < 40 Then Exit Sub
+    mBeatCount = 0
+
+    On Error Resume Next
+    If mTotalSteps > 0 Then
+        Application.StatusBar = "Chat Formatter: " & label & _
+            " (" & mDoneSteps & " / " & mTotalSteps & ")"
+    Else
+        Application.StatusBar = "Chat Formatter: " & label & " ..."
+    End If
+    DoEvents
+    Err.Clear
+    On Error GoTo 0
+End Sub
+
+
+'-----------------------------------------------------------------------
 '  Core formatter
 '-----------------------------------------------------------------------
 
@@ -297,37 +359,58 @@ Private Sub RunStageCore(ByVal doc As Document, ByVal rng As Range, ByVal doTabl
     Dim undoStarted As Boolean
     Dim failed As Boolean
     Dim errNum As Long, errDesc As String
+    Dim steps As Long
 
+    ' A second pass (user right-clicked again while we were pumping the
+    ' message queue) must not start on top of this one.
+    If mBusy Then Exit Sub
 
     EnsureBullet
+
+    steps = 13
+    If doTables Then steps = steps + 1
+    BeginRun steps
 
     su = Application.ScreenUpdating
     Application.ScreenUpdating = False
 
     On Error Resume Next
     undoStarted = False
+    ' Pagination and proofing are by far the most expensive things Word can
+    ' do while a document is being restructured. Suspend both for the run.
+    Application.Options.Pagination = False
+    Application.Options.CheckSpellingAsYouType = False
+    Application.Options.CheckGrammarAsYouType = False
     Err.Clear
     On Error GoTo CleanUp
 
-
     If doTables Then
         ConvertPipeTablesToTable doc, rng
+        StepDone "tables"
         ConvertTSVToTable doc, rng
+        StepDone "tables"
     End If
 
-
     RemoveHorizontalRules doc, rng
+    StepDone "rules"
     ConvertCodeBlocks doc, rng
+    StepDone "code blocks"
     ConvertHeadings doc, rng
+    StepDone "headings"
     FormatBold doc, rng
     FormatItalic doc, rng
     FormatStrike doc, rng
     FormatInlineCode doc, rng
     FormatLinks doc, rng
+    StepDone "inline styles"
     ConvertBlockquotes doc, rng
+    StepDone "quotes"
     ConvertBulletLists doc, rng
+    StepDone "bullet lists"
     ConvertNumberedLists doc, rng
+    StepDone "numbered lists"
     CleanStrayMarkers doc, rng
+    StepDone "cleanup"
 
 CleanUp:
     failed = (Err.Number <> 0)
@@ -336,8 +419,22 @@ CleanUp:
 
     On Error Resume Next
     Application.ScreenUpdating = su
+    Application.Options.CheckSpellingAsYouType = True
+    Application.Options.CheckGrammarAsYouType = True
+    Application.Options.Pagination = True
+    Application.StatusBar = False
     Err.Clear
     On Error GoTo 0
+
+    ' Repaginate once at the end rather than continuously during the run.
+    If Not failed Then
+        On Error Resume Next
+        doc.Repaginate
+        Err.Clear
+        On Error GoTo 0
+    End If
+
+    EndRun
 
     If failed Then
         MsgBox "Error during formatting:" & vbCrLf & _
@@ -360,6 +457,7 @@ Private Sub RemoveHorizontalRules(ByVal doc As Document, ByVal rng As Range)
 
     For k = doc.Paragraphs.Count To 1 Step -1
         Set p = doc.Paragraphs(k)
+        Beat "RemoveHorizontalRules"
         t = CleanParaText(p.Range.Text)
         body = Replace(Replace(t, "-", ""), "*", "")
         body = Replace(body, "_", "")
@@ -389,6 +487,7 @@ Private Sub ConvertCodeBlocks(ByVal doc As Document, ByVal rng As Range)
         guard = guard + 1
         If guard > 20000 Then Exit For
 
+        Beat "ConvertCodeBlocks"
         If InStr(doc.Paragraphs(i).Range.Text, "```") > 0 Then
             If Not inCode Then
                 openIdx = i
@@ -449,6 +548,7 @@ Private Sub ConvertHeadings(ByVal doc As Document, ByVal rng As Range)
     Dim prevTxt As String
 
     For k = doc.Paragraphs.Count To 1 Step -1
+        Beat "ConvertHeadings"
         Set p = doc.Paragraphs(k)
         Set r = p.Range
         If r.End > r.Start Then
@@ -607,6 +707,7 @@ Private Sub ConvertBlockquotes(ByVal doc As Document, ByVal rng As Range)
         Set r = p.Range
         If r.End > r.Start Then
             If r.Characters.Last.Text = Chr(13) Then r.MoveEnd wdCharacter, -1
+        Beat "ConvertBlockquotes"
             txt = r.Text
             If Left(txt, 2) = "> " Then
                 On Error Resume Next
@@ -647,6 +748,7 @@ Private Sub ConvertBulletLists(ByVal doc As Document, ByVal rng As Range)
         Set r = p.Range
         If r.End > r.Start Then
             If r.Characters.Last.Text = Chr(13) Then r.MoveEnd wdCharacter, -1
+        Beat "ConvertBulletLists"
             txt = r.Text
             If Left(txt, 2) = "- " Or Left(txt, 2) = "* " Or Left(txt, 2) = "+ " Then
                 body = Mid(txt, 3)
@@ -690,6 +792,7 @@ Private Sub ConvertNumberedLists(ByVal doc As Document, ByVal rng As Range)
         Set r = p.Range
         If r.End > r.Start Then
             If r.Characters.Last.Text = Chr(13) Then r.MoveEnd wdCharacter, -1
+        Beat "ConvertNumberedLists"
             txt = r.Text
             pos = InStr(txt, ". ")
             If pos > 1 And pos <= 4 Then
@@ -754,6 +857,7 @@ Private Sub ConvertPipeTablesToTable(ByVal doc As Document, ByVal rng As Range)
         guard = guard + 1
         If guard > 20000 Then Exit Do
 
+        Beat "pipe tables"
         rowText = CleanParaText(doc.Paragraphs(i).Range.Text)
 
         If IsPipeRow(rowText) And i + 1 <= doc.Paragraphs.Count Then
@@ -910,6 +1014,7 @@ Private Sub ConvertTSVToTable(ByVal doc As Document, ByVal rng As Range)
         guard = guard + 1
         If guard > 20000 Then Exit Do
 
+        Beat "TSV tables"
         paraText = doc.Paragraphs(i).Range.Text
         curTabs = CountChar(paraText, vbTab)
 
