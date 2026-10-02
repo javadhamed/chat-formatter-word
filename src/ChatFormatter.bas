@@ -38,23 +38,23 @@ Public Sub FormatChatText()
     Dim rng As Range
 
     If Documents.Count = 0 Then
-        MsgBox "هیچ سندی باز نیست.", vbExclamation, "Chat Formatter"
+        MsgBox "No document is open.", vbExclamation, "Chat Formatter"
         Exit Sub
     End If
     Set doc = ActiveDocument
 
     Dim resp As VbMsgBoxResult
     resp = MsgBox( _
-        "آیا جدول‌های TSV یا Pipe را هم به جدول Word تبدیل کنم؟" & vbCrLf & vbCrLf & _
-        "بله = قالب‌بندی Markdown + جدول‌ها" & vbCrLf & _
-        "خیر = فقط قالب‌بندی Markdown", _
+        "Convert TSV and Pipe tables to Word tables too?" & vbCrLf & vbCrLf & _
+        "Yes = Markdown formatting + tables" & vbCrLf & _
+        "No = Markdown formatting only", _
         vbYesNo + vbQuestion, "Chat Formatter")
 
     Set rng = doc.Content
 
     If Not RangeNeedsFormatting(rng) Then
-        MsgBox "متن انتخاب‌شده نیاز به قالب‌بندی ندارد." & vbCrLf & _
-               "متن تمیز و مرتب است.", vbInformation, "Chat Formatter"
+        MsgBox "The selected text does not need formatting." & vbCrLf & _
+               "The text is already clean.", vbInformation, "Chat Formatter"
         Exit Sub
     End If
 
@@ -66,7 +66,7 @@ Public Sub FormatSelection()
     Dim doc As Document
     Dim rng As Range
     If Documents.Count = 0 Then
-        MsgBox "هیچ سندی باز نیست.", vbExclamation, "Chat Formatter"
+        MsgBox "No document is open.", vbExclamation, "Chat Formatter"
         Exit Sub
     End If
     Set doc = ActiveDocument
@@ -89,13 +89,13 @@ Public Sub FormatSelection()
     End If
 
     If rng Is Nothing Then
-        MsgBox "هیچ سندی برای قالب‌بندی وجود ندارد.", vbExclamation, "Chat Formatter"
+        MsgBox "No document available for formatting.", vbExclamation, "Chat Formatter"
         Exit Sub
     End If
 
     If Not RangeNeedsFormatting(rng) Then
-        MsgBox "متن انتخاب‌شده نیاز به قالب‌بندی ندارد." & vbCrLf & _
-               "متن تمیز و مرتب است.", vbInformation, "Chat Formatter"
+        MsgBox "The selected text does not need formatting." & vbCrLf & _
+               "The text is already clean.", vbInformation, "Chat Formatter"
         Exit Sub
     End If
 
@@ -152,13 +152,13 @@ Public Sub ToggleAutoFormat()
     v = GetSetting("AutoFormat", "1")
     If v Then
         SetSetting "AutoFormat", "0"
-        MsgBox "حالت قالب‌بندی خودکار غیرفعال شد." & vbCrLf & _
-                     "برای فعال‌سازی دوباره: Alt+F8 و سپس ToggleAutoFormat", _
+        MsgBox "Auto-format mode disabled." & vbCrLf & _
+                     "To re-enable: Alt+F8 then ToggleAutoFormat", _
                   vbInformation, "Chat Formatter"
     Else
         SetSetting "AutoFormat", "1"
-        MsgBox "حالت قالب‌بندی خودکار فعال شد." & vbCrLf & _
-                     "متن AI را در Word انتخاب و راست‌کلیک کنید تا خودکار قالب‌بندی شود.", _
+        MsgBox "Auto-format mode enabled." & vbCrLf & _
+                     "Select AI text in Word and right-click to format it automatically.", _
                   vbInformation, "Chat Formatter"
     End If
 End Sub
@@ -166,16 +166,16 @@ End Sub
 
 Public Sub ShowSettings()
     Dim autoFmt As String, tables As String
-    If GetSetting("AutoFormat", "1") = "1" Then autoFmt = "فعال"
-    Else autoFmt = "غیرفعال"
+    If GetSetting("AutoFormat", "1") = "1" Then autoFmt = "Enabled"
+    Else autoFmt = "Disabled"
     End If
-    If GetSetting("Tables", "1") = "1" Then tables = "فعال"
-    Else tables = "غیرفعال"
+    If GetSetting("Tables", "1") = "1" Then tables = "Enabled"
+    Else tables = "Disabled"
     End If
     MsgBox "Chat Formatter " & CF_VERSION & vbCrLf & vbCrLf & _
-           "قالب‌بندی خودکار (راست‌کلیک): " & autoFmt & vbCrLf & _
-           "تبدیل جدول: " & tables & vbCrLf & vbCrLf & _
-           "منوی ابزار:", _
+           "Auto-format (right-click): " & autoFmt & vbCrLf & _
+           "Table conversion: " & tables & vbCrLf & vbCrLf & _
+           "Toolbar:", _
            vbInformation, "Chat Formatter Settings"
 End Sub
 
@@ -264,6 +264,18 @@ Private Function LooksLikeAIChat(ByVal s As String) As Boolean
 End Function
 
 
+Public Sub CF_SilentTest()
+    Dim doc As Document
+    Dim rng As Range
+    If Documents.Count = 0 Then Exit Sub
+    Set doc = ActiveDocument
+    Set rng = doc.Content
+    silentMode = True
+    FormatRangeCore doc, rng, True
+    silentMode = False
+End Sub
+
+
 '-----------------------------------------------------------------------
 '  Core formatter
 '-----------------------------------------------------------------------
@@ -328,12 +340,12 @@ CleanUp:
     On Error GoTo 0
 
     If failed Then
-        MsgBox "خطا در اجرا:" & vbCrLf & _
-               errDesc & vbCrLf & "کد خطا: " & errNum & vbCrLf & vbCrLf & _
-               "بازگشت: Ctrl+Z", vbExclamation, "Chat Formatter"
+        MsgBox "Error during formatting:" & vbCrLf & _
+               errDesc & vbCrLf & "Error code: " & errNum & vbCrLf & vbCrLf & _
+               "Undo: Ctrl+Z", vbExclamation, "Chat Formatter"
     Else
-        MsgBox "قالب‌بندی با موفقیت انجام شد!" & vbCrLf & _
-               "(بازگشت: Ctrl+Z)", vbInformation, "Chat Formatter"
+        MsgBox "Formatting completed successfully!" & vbCrLf & _
+               "(Undo: Ctrl+Z)", vbInformation, "Chat Formatter"
     End If
 End Sub
 
@@ -1053,9 +1065,9 @@ Private Sub CreateToolbarButton(ByVal notify As Boolean)
     cb.Visible = True
 
     If notify Then
-        MsgBox "دکمه ""Format Chat Text"" روی نوار ابزار اضافه شد." & vbCrLf & _
-               "می‌توانید از این دکمه یا از منوی راست‌کلیک برای قالب‌بندی استفاده کنید " & _
-               "(یا Alt+F8 و سپس FormatChatText).", _
+        MsgBox "The ""Format Chat Text"" button was added to the toolbar." & vbCrLf & _
+               "You can use this button or the right-click menu to format text " & _
+               "(or Alt+F8 then FormatChatText).", _
                vbInformation, "Chat Formatter"
     End If
 End Sub
