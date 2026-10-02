@@ -42,11 +42,16 @@ public class WordDialogs {
         catch { return false; }
     }
 
+    // BM_CLICK needs zero wParam/lParam; passing 1 silently does nothing,
+    // which leaves the dialog on screen and lets a broken build report OK.
+    const uint BM_CLICK = 0x00F5;
+    const uint WM_CLOSE = 0x0010;
+
     public static List<string> CollectAndDismiss() {
         var r = new List<string>();
         var handles = new List<IntPtr>();
         EnumWindows((h, l) => {
-            if (!IsWord(h) || !IsWindowVisible(h)) return true;
+            if (!IsWord(h)) return true;
             var c = new StringBuilder(256); GetClassName(h, c, 256);
             if (c.ToString() == "#32770") handles.Add(h);
             return true;
@@ -57,7 +62,10 @@ public class WordDialogs {
                 if (ct.Length > 0) r.Add(ct.ToString());
                 return true;
             }, IntPtr.Zero);
-            SendMessage(h, 0x0111, (IntPtr)1, IntPtr.Zero);
+            SendMessage(h, BM_CLICK, IntPtr.Zero, IntPtr.Zero);
+            // If a click did not take it down, close it outright so the build
+            // never leaves a modal dialog blocking the next Word launch.
+            if (IsWindowVisible(h)) SendMessage(h, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
         }
         return r;
     }
@@ -74,6 +82,88 @@ if (-not $OutputPath) { $OutputPath = Join-Path $root 'ChatFormatter.dotm' }
 foreach ($f in @($basFile, $clsFile)) {
     if (-not (Test-Path -LiteralPath $f)) { throw "Missing source: $f" }
 }
+
+# ---------------------------------------------------------------------------
+# Structural pre-check
+#
+# Word's own compile is the only real authority, but it reports syntax
+# failures as a modal dialog with no line number, and that dialog is easy
+# for the compile step below to miss -- which lets a template that cannot
+# compile be saved and installed. This catches the common case (a block
+# keyword sitting on a line after "Then <statement>", which VBA reads as
+# "Else without If") and names the line before Word ever runs.
+# ---------------------------------------------------------------------------
+$structErrors = @()
+foreach ($f in @($basFile, $clsFile)) {
+    $raw = [System.IO.File]::ReadAllLines($f, [System.Text.Encoding]::UTF8)
+
+    # Join VBA line-continuation (" _") first. A condition split across
+    # physical lines only exposes its "Then" on the final one, so without
+    # this the block opener is missed and the matching "End If" looks stray.
+    $logical = New-Object System.Collections.Generic.List[object]
+    $buf = ''
+    $bufLine = 0
+    for ($i = 0; $i -lt $raw.Length; $i++) {
+        $t = $raw[$i].Trim()
+        if ($buf -eq '') { $bufLine = $i + 1 }
+        if ($t -match '_\s*$') {
+            $buf += ($t -replace '_\s*$', '') + ' '
+            continue
+        }
+        $logical.Add([pscustomobject]@{ Line = $bufLine; Code = ($buf + $t) })
+        $buf = ''
+    }
+    if ($buf -ne '') { $logical.Add([pscustomobject]@{ Line = $bufLine; Code = $buf }) }
+
+    $depth = 0
+    foreach ($entry in $logical) {
+        $code = $entry.Code.Trim()
+        if ($code -eq '' -or $code.StartsWith("'")) { continue }
+        $code = ($code -split "'", 2)[0].Trim()
+        if ($code -eq '') { continue }
+
+        # "If ... Then <something>" is a single-line If: it opens no block,
+        # so a following Else/End If is a structural error.
+        $opensBlock = $false
+        if ($code -match '^(?i)If\b') {
+            if ($code -match '(?i)\bThen\b(.*)$') {
+                if ($Matches[1].Trim() -eq '') { $opensBlock = $true }
+            }
+        }
+        elseif ($code -match '^(?i)ElseIf\b') {
+            if ($depth -eq 0) {
+                $structErrors += ("{0}:{1}: 'ElseIf' with no open 'If'" -f `
+                    (Split-Path -Leaf $f), $entry.Line)
+            }
+        }
+        elseif ($code -match '^(?i)Else\b') {
+            if ($depth -eq 0) {
+                $structErrors += ("{0}:{1}: 'Else' with no open 'If' -> {2}" -f `
+                    (Split-Path -Leaf $f), $entry.Line, $code)
+            }
+        }
+        elseif ($code -match '^(?i)End\s+If\b') {
+            if ($depth -eq 0) {
+                $structErrors += ("{0}:{1}: 'End If' with no open 'If' -> {2}" -f `
+                    (Split-Path -Leaf $f), $entry.Line, $code)
+            }
+            else { $depth-- }
+        }
+
+        if ($opensBlock) { $depth++ }
+    }
+    if ($depth -ne 0) {
+        $structErrors += ("{0}: {1} unclosed block(s) at end of file" -f `
+            (Split-Path -Leaf $f), $depth)
+    }
+}
+if ($structErrors) {
+    Write-Host ''
+    Write-Host 'STRUCTURAL ERRORS (VBA would report these as compile errors):'
+    $structErrors | ForEach-Object { Write-Host "  $_" }
+    throw 'Source failed the structural pre-check; refusing to build.'
+}
+Write-Host 'Structure: OK'
 
 # ---------------------------------------------------------------------------
 # Trust access to the VBA project object model - required by Word COM
