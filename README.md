@@ -54,13 +54,21 @@ Header rows are bold, shaded, and repeat across page breaks. Tables stretch to p
 
 ### Install
 
+**Windows**
+
 1. Download the latest release ZIP from the [Releases page](../../releases)
 2. Extract it anywhere
-3. **Double-click `install.bat`** (runs as admin if needed)
+3. **Double-click `install.bat`**
 
-That copies `ChatFormatter.dotm` into Word's `STARTUP` folder and registers the folder as a trusted location so macros run without security prompts.
+**macOS**
 
-**Restart Word** afterwards.
+1. Download and unzip the release
+2. **Double-click `install.command`** — if macOS refuses to open it, right-click it and choose **Open**
+3. Open Word and answer **Yes** the first time it asks to enable the macros
+
+Both copy `ChatFormatter.dotm` into Word's `STARTUP` folder, so Word loads it as a global add-in on every launch. The Windows installer also registers that folder as a trusted location so macros run without security prompts.
+
+**Restart Word** afterwards. Settings live in `~/.chatformatter/settings.ini` on both platforms.
 
 ---
 
@@ -83,15 +91,15 @@ That copies `ChatFormatter.dotm` into Word's `STARTUP` folder and registers the 
 
 ### Requirements
 
-- Windows
-- Microsoft Word 2016 or newer
+- Windows or macOS
+- Microsoft Word 2016 or newer (on macOS the right-click entry needs 16.52+)
 - **No Python, no .NET, no internet, no admin rights** (unless Word is in a protected path)
 
 ---
 
 ### Uninstall
 
-Run **`uninstall.bat`** — it removes the template, trusted location, and registry settings.
+Run **`uninstall.bat`** (Windows) or **`uninstall.command`** (macOS). It removes the template and your `settings.ini`; the trusted-location entry on Windows is left in place because it is harmless.
 
 ---
 
@@ -99,24 +107,40 @@ Run **`uninstall.bat`** — it removes the template, trusted location, and regis
 
 The `.dotm` is committed so most users never need this. To rebuild after editing the VBA:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\build.ps1
+```
+python3 tools/package_win.py     # dist/win/ and dist/ChatFormatter-Win-<version>.zip
+python3 tools/package_mac.py     # dist/mac/ and dist/ChatFormatter-Mac-<version>.zip
 ```
 
-Requires Word installed. The script temporarily enables Word's "Trust access to the VBA project object model" setting, injects `src/*.bas` and `src/*.cls`, compiles, then restores the original setting.
+Needs Python 3 and `olefile` (`pip install olefile`). The build writes the VBA project into a copy of `tools/seed.dotm` using a pure-Python MS-OVBA writer, so **it needs neither Word nor PowerShell** and runs identically on every platform. The template is platform neutral: the same `.dotm` ships to Windows and macOS, only the installer differs.
+
+Check the result before shipping:
+
+```
+python3 tests/lint_vba.py src/ChatFormatter.bas src/ThisDocument.cls
+python3 tests/test_cases.py
+python3 tests/test_sample.py
+python3 tests/test_word_output.py <original.docx> <formatted.docx>
+```
+
+`test_word_output.py` compares a document the add-in already formatted against the reference model; it needs a real Word run to produce the second file.
 
 ---
 
 ### Repository Layout
 
 ```
-install.bat              one-click installer
-uninstall.bat            one-click uninstaller
+install.bat              one-click installer (Windows)
+uninstall.bat            one-click uninstaller (Windows)
+packaging/mac/           install.command, uninstall.command, README-mac.md
 ChatFormatter.dotm       compiled template (what Word loads)
-src/ChatFormatter.bas    all formatting logic (14 stages)
+src/ChatFormatter.bas    all formatting logic, one linear pass
 src/ThisDocument.cls     event handlers for auto-format
-tools/build.ps1          compiles src/ into ChatFormatter.dotm
-tools/test-*.ps1         stage-by-stage test harnesses
+tools/vbabuild.py        MS-OVBA compressor and CFB writer
+tools/build_dotm.py      injects src/ into tools/seed.dotm
+tools/package_win.py     builds the Windows release ZIP
+tools/package_mac.py     builds the macOS release ZIP
+tests/                   reference model and test suites
 ```
 
 ---
@@ -191,13 +215,21 @@ MIT. See `LICENSE`.
 
 ### نصب
 
+**ویندوز**
+
 ۱. آخرین ZIP منتشر شده را از [صفحه Releases](../../releases) دانلود کنید
 ۲. آن را در محل دلخواه استخراج کنید
-۳. **روی `install.bat` دابل‌کلیک کنید** (در صورت نیاز به‌صورت ادمین اجرا می‌شود)
+۳. **روی `install.bat` دابل‌کلیک کنید**
 
-این کار `ChatFormatter.dotm` را در پوشه `STARTUP` ورد کپی می‌کند و آن پوشه را به عنوان Trusted Location ثبت می‌کند تا ماکروها بدون پرامپت امنیتی اجرا شوند.
+**مک**
 
-**ورد را ری‌استارت کنید.**
+۱. فایل زیپ را دانلود و باز کنید
+۲. **روی `install.command` دابل‌کلیک کنید** — اگر مک باز نکرد، راست‌کلیک کنید و **Open** را بزنید
+۳. ورد را باز کنید و بار اول، وقتی پرسید ماکروها فعال شوند، **Yes** را بزنید
+
+در هر دو سیستم `ChatFormatter.dotm` در پوشه `STARTUP` ورد کپی می‌شود، پس ورد آن را در هر اجرا به‌عنوان یک add-in سراسری بارگذاری می‌کند. نصب‌کنندهٔ ویندوز آن پوشه را هم به‌عنوان Trusted Location ثبت می‌کند تا ماکروها بدون پرامپت امنیتی اجرا شوند.
+
+**ورد را ری‌استارت کنید.** تنظیمات در هر دو سیستم در `~/.chatformatter/settings.ini` است.
 
 ---
 
@@ -221,15 +253,15 @@ MIT. See `LICENSE`.
 
 ### پیش‌نیازها
 
-- ویندوز
-- مایکروسافت ورد ۲۰۱۶ یا جدیدتر
+- ویندوز یا مک
+- مایکروسافت ورد ۲۰۱۶ یا جدیدتر (روی مک، راست‌کلیک نیاز به نسخهٔ ۱۶.۵۲ به بعد دارد)
 - **بدون پایتون، بدون دات‌نت، بدون اینترنت، بدون حق ادمین** (مگر اینکه ورد در مسیر محافظت‌شده باشد)
 
 ---
 
 ### حذف نصب
 
-**`uninstall.bat`** را اجرا کنید — قالب، Trusted Location و تنظیمات رجیستری را حذف می‌کند.
+**`uninstall.bat`** (ویندوز) یا **`uninstall.command`** (مک) را اجرا کنید. این‌ها قالب و فایل `settings.ini` شما را حذف می‌کنند؛ رکورد Trusted Location روی ویندوز باقی می‌ماند چون بی‌اثر است.
 
 ---
 
@@ -237,24 +269,40 @@ MIT. See `LICENSE`.
 
 فایل `.dotm` در مخزن ذخیره شده است بنابراین اکثر کاربران نیازی به ساخت ندارند. برای بازسازی پس از ویرایش VBA:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\build.ps1
+```
+python3 tools/package_win.py     # dist/win/ و dist/ChatFormatter-Win-<version>.zip
+python3 tools/package_mac.py     # dist/mac/ و dist/ChatFormatter-Mac-<version>.zip
 ```
 
-نیاز به نصب ورد دارد. اسکریپت به‌صورت موقت تنظیم "Trust access to the VBA project object model" را فعال می‌کند، فایل‌های `src/*.bas` و `src/*.cls` را تزریق می‌کند، کامپایل کرده و تنظیمات را بازیابی می‌کند.
+به پایتون ۳ و `olefile` (`pip install olefile`) نیاز دارد. بیلد، پروژهٔ VBA را با یک نویسندهٔ خالص پایتونی MS-OVBA داخل کپی‌ای از `tools/seed.dotm` می‌نویسد؛ بنابراین **نه به ورد نیاز دارد و نه به PowerShell** و روی همهٔ سیستم‌ها یکسان کار می‌کند. خودِ قالب مستقل از پلتفرم است: همان `.dotm` برای ویندوز و مک ارسال می‌شود و فقط نصب‌کننده فرق می‌کند.
+
+قبل از انتشار بررسی کنید:
+
+```
+python3 tests/lint_vba.py src/ChatFormatter.bas src/ThisDocument.cls
+python3 tests/test_cases.py
+python3 tests/test_sample.py
+python3 tests/test_word_output.py <original.docx> <formatted.docx>
+```
+
+`test_word_output.py` سندی را که افزونه فرمت کرده با مدل مرجع مقایسه می‌کند؛ برای ساختن فایل دوم یک اجرای واقعی ورد لازم است.
 
 ---
 
 ### چیدمان مخزن
 
 ```
-install.bat              نصب‌کننده یک‌کلیک
-uninstall.bat            حذف‌کننده یک‌کلیک
+install.bat              نصب‌کننده یک‌کلیک (ویندوز)
+uninstall.bat            حذف‌کننده یک‌کلیک (ویندوز)
+packaging/mac/           install.command، uninstall.command، README-mac.md
 ChatFormatter.dotm       قالب کامپایل‌شده (چه چیزی ورد بارگذاری می‌کند)
-src/ChatFormatter.bas    کل منطق قالب‌بندی (۱۴ استیج)
+src/ChatFormatter.bas    کل منطق قالب‌بندی، در یک پاس خطی
 src/ThisDocument.cls     هندلرهای رویداد برای قالب‌بندی خودکار
-tools/build.ps1          کامپایل src/ به ChatFormatter.dotm
-tools/test-*.ps1         تست‌های استیج‌به‌استیج
+tools/vbabuild.py        فشرده‌ساز MS-OVBA و نویسندهٔ CFB
+tools/build_dotm.py      تزریق src/ به tools/seed.dotm
+tools/package_win.py     ساخت ZIP نسخهٔ ویندوز
+tools/package_mac.py     ساخت ZIP نسخهٔ مک
+tests/                   مدل مرجع و مجموعه تست‌ها
 ```
 
 ---
@@ -281,7 +329,7 @@ MIT. فایل `LICENSE` را ببینید.
 
 ### مشارکت
 
-پیشنهادات، گزارش باگ و Pull Requestها خوش‌آمدند. لطفاً قبل از ارسال PR، `tools\build.ps1` را اجرا کنید تا قالب بیلد شود.
+پیشنهادات، گزارش باگ و Pull Requestها خوش‌آمدند. لطفاً قبل از ارسال PR، تست‌های `tests/` را اجرا کنید و قالب را با `python3 tools/package_win.py` و `python3 tools/package_mac.py` بسازید.
 
 ---
 

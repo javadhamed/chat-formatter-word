@@ -1,50 +1,50 @@
 @echo off
-setlocal EnableExtensions EnableDelayedExpansion
+setlocal EnableExtensions
+chcp 65001 >nul 2>&1
 
 REM ==============================================================
-REM   Chat Formatter for Word - Uninstaller
-REM   Removes the template, the trusted location and the settings.
+REM   Chat Formatter for Word - Uninstaller (Windows)
 REM ==============================================================
 
 title Chat Formatter - Uninstall
 
-set "TEMPLATE_NAME=ChatFormatter.dotm"
 set "STARTUP=%APPDATA%\Microsoft\Word\STARTUP"
-set "SECKEY=HKCU\Software\Microsoft\Office\16.0\Word\Security\Trusted Locations"
+set "CFHOME=%USERPROFILE%"
+if not defined CFHOME set "CFHOME=%HOMEDRIVE%%HOMEPATH%"
 
-echo [1/3] Removing template...
-if exist "%STARTUP%\%TEMPLATE_NAME%" (
-    del /F /Q "%STARTUP%\%TEMPLATE_NAME%" >nul 2>&1
-    if errorlevel 1 (
-        echo [WARN] Could not delete the file. Close Word and try again.
-    ) else (
-        echo       OK
-    )
+echo.
+echo ==============================================================
+echo   Chat Formatter for Word - Uninstall
+echo ==============================================================
+echo.
+
+echo [1/3] Checking for running Word...
+tasklist /FI "IMAGENAME eq WINWORD.EXE" 2>nul | find /I "WINWORD.EXE" >nul
+if not errorlevel 1 (
+    echo       Word is running. Close it, then reopen Word.
 ) else (
-    echo       Not installed.
+    echo       Word is not running.
 )
 
-echo [2/3] Removing trusted location...
-reg delete "%SECKEY%\LocationChatFormatter" /f >nul 2>&1
-if errorlevel 1 (
-    echo       Not present.
+echo [2/3] Removing the template...
+if exist "%STARTUP%\ChatFormatter.dotm" (
+    del /F /Q "%STARTUP%\ChatFormatter.dotm" >nul 2>&1
+    echo       Removed.
 ) else (
-    echo       OK
+    echo       Nothing to remove.
 )
 
-echo [3/3] Removing settings...
-reg delete "HKCU\Software\ChatFormatter" /f >nul 2>&1
-if errorlevel 1 (
-    echo       Not present.
+echo [3/3] Removing your settings...
+if exist "%CFHOME%\.chatformatter" (
+    rmdir /S /Q "%CFHOME%\.chatformatter" >nul 2>&1
+    echo       Removed.
 ) else (
-    echo       OK
+    echo       No settings to remove.
 )
 
 echo.
-echo Uninstalled. Restart Word to finish.
-echo.
-echo Note: the toolbar button created by the add-in disappears after
-echo       Word restarts.
+echo The trusted location entry was left in place; it is harmless.
+echo Word no longer has Chat Formatter loaded.
 echo.
 pause
 endlocal
