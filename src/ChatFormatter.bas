@@ -29,8 +29,51 @@ Private mBeatCount As Long
 Private mTotalSteps As Long
 Private mDoneSteps As Long
 
+' Per stage profiling for CF_Diag. mDiagPath is empty during normal use, so
+' every write below is skipped; only the diagnostic entry point sets it.
+Private mDiagPath As String
+Private mDiagT0 As Double
+Private mStageBeat As Long
+
+' The document the current pass is working on, so helpers without a doc
+' parameter (StepDone) can still ask it about itself.
+Private mCurDoc As Document
+
+' Incremental processing state (replaces batch loops)
+Private mIncState As Long          ' 0=Idle, 1=Processing, 2=Done
+Private mIncStage As Long          ' current stage index
+Private mIncParaIdx As Long        ' current paragraph index
+Private mIncDoTables As Boolean    ' whether to process tables
+Private mIncRng As Range           ' range being processed
+Private mIncTSVStart As Long       ' start index of current TSV block
+Private mIncTSVMaxTabs As Long     ' max tabs in current TSV block
+Private mIncTSVRows As Long        ' rows collected
+Private mIncTSVCols As Long        ' cols in current TSV block
+Private mIncTSVData() As String    ' accumulated TSV cell data
+Private mIncTotalParas As Long     ' cached paragraph count
+
 Public Const CF_VERSION As String = "1.0.0"
 Public Const CF_TOOLBAR As String = "ChatFormatterToolbar"
+
+' Incremental processing constants
+Private Const INC_IDLE = 0
+Private Const INC_RUNNING = 1
+Private Const INC_DONE = 2
+
+Private Const STG_TABLES_PIPE = 1
+Private Const STG_TABLES_TSV = 2
+Private Const STG_HR = 3
+Private Const STG_CODE_BLOCKS = 4
+Private Const STG_HEADINGS = 5
+Private Const STG_BOLD = 6
+Private Const STG_ITALIC = 7
+Private Const STG_STRIKE = 8
+Private Const STG_INLINE_CODE = 9
+Private Const STG_LINKS = 10
+Private Const STG_QUOTES = 11
+Private Const STG_BULLET = 12
+Private Const STG_NUMBERED = 13
+Private Const STG_CLEANUP = 14
 
 ' Bullet glyph. Chr(149) is undefined in Windows-1256/Arabic code pages
 ' and renders as garbage; 0x2022 is the real Unicode bullet.
@@ -293,6 +336,37 @@ Private Function LooksLikeAIChat(ByVal s As String) As Boolean
 End Function
 
 
+' Build-time gate. Invoking a macro compiles only the path that macro
+' touches, so an empty probe would miss Option Explicit violations in
+' every stage. Running the real pipeline over a tiny document instead
+' forces the whole project to compile and smoke tests it in one go.
+'
+' Failure is reported by re-raising, so the COM caller sees the VBA error
+' number and description. Success is simply returning.
+Public Sub CF_CompileProbe()
+    Dim doc As Document
+    On Error GoTo Failed
+    Set doc = Documents.Add()
+    doc.Content.Text = _
+        "# Heading" & vbCr & _
+        "Text **bold** and `code` here." & vbCr & _
+        "- first" & vbCr & _
+        "- second" & vbCr & _
+        "> quoted" & vbCr & _
+        "```" & vbCr & "code block" & vbCr & "```" & vbCr & _
+        "| h | v |" & vbCr & "| --- | --- |" & vbCr & "| a | 1 |"
+
+    FormatRangeCore doc, doc.Content, True
+
+    On Error Resume Next
+    doc.Close 0
+    Exit Sub
+
+Failed:
+    Err.Raise 5, "CF_CompileProbe", "probe failed"
+End Sub
+
+
 ' Diagnostic entry point. Runs the full pipeline on the active document
 ' without any MsgBox and records the outcome (including any runtime error)
 ' to %TEMP%\ChatFormatterDiag.txt so a headless test can read the result
@@ -325,6 +399,9 @@ Public Sub CF_Diag()
                    " tables=" & doc.Tables.Count
 
     t = Timer
+    mDiagPath = path
+    mDiagT0 = t
+    mStageBeat = 0
     On Error GoTo Failed
     FormatRangeCore doc, rng, True
     failed = False
@@ -337,6 +414,7 @@ Failed:
 
 Report:
     mQuiet = False
+    mDiagPath = ""
     AppendDiag path, "Elapsed=" & Format$(Timer - t, "0.0") & "s"
     AppendDiag path, "After: paragraphs=" & doc.Paragraphs.Count & _
                    " tables=" & doc.Tables.Count
@@ -391,6 +469,23 @@ End Sub
 
 Private Sub StepDone(ByVal label As String)
     mDoneSteps = mDoneSteps + 1
+
+    ' Stage boundary: record cumulative time and how many paragraph visits the
+    ' stage made. Beats per paragraph is what separates a genuinely expensive
+    ' stage from one that is merely quadratic.
+    If Len(mDiagPath) > 0 Then
+        Dim paraCount As Long
+        On Error Resume Next
+        paraCount = mCurDoc.Paragraphs.Count
+        Err.Clear
+        On Error GoTo 0
+        AppendDiag mDiagPath, "  stage: " & label & _
+                                "  beats=" & mStageBeat & _
+                                "  paras=" & paraCount & _
+                                "  elapsed=" & Format$(Timer - mDiagT0, "0.0") & "s"
+    End If
+    mStageBeat = 0
+
     ' Force a repaint at every stage boundary, not just every 40th hit,
     ' so the progress text is always current when a stage is slow.
     mBeatCount = 39
@@ -403,6 +498,7 @@ End Sub
 ' CF_RightClickHandler), NOT here: mBusy is true for the whole run, so
 ' testing it here would suppress every DoEvents and freeze the window.
 Private Sub Beat(ByVal label As String)
+    mStageBeat = mStageBeat + 1
     mBeatCount = mBeatCount + 1
     If mBeatCount < 40 Then Exit Sub
     mBeatCount = 0
@@ -453,6 +549,7 @@ Private Sub RunStageCore(ByVal doc As Document, ByVal rng As Range, ByVal doTabl
 
     EnsureBullet
 
+    mCurDoc = doc
     steps = 13
     If doTables Then steps = steps + 1
     BeginRun steps

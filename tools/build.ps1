@@ -224,13 +224,12 @@ try {
         }
 
         # ---- standard module -------------------------------------------------
-        $bas = [System.IO.File]::ReadAllText($basFile, [System.Text.Encoding]::UTF8)
-        # Drop the Attribute line, it is only valid on an imported .bas file.
-        $bas = $bas -replace '(?m)^Attribute VB_Name.*\r?\n', ''
-
-        $std = $vbProj.VBComponents.Add(1)   # vbext_ct_StdModule
+        # Import, not CodeModule.AddFromString. AddFromString silently drops
+        # code on a module this size, and the template then reloads with
+        # "Compile error in hidden module: ChatFormatter" even though the
+        # in-session compile looked clean.
+        $std = $vbProj.VBComponents.Import($basFile)
         $std.Name = 'ChatFormatter'
-        $std.CodeModule.AddFromString($bas)
         Write-Host "Injected module: ChatFormatter ($($std.CodeModule.CountOfLines) lines)"
 
         # ---- ThisDocument event code ----------------------------------------
@@ -239,39 +238,21 @@ try {
         $cls = $cls -replace '(?m)^Attribute .*\r?\n', ''
 
         $thisDoc = $vbProj.VBComponents.Item('ThisDocument')
-        $thisDoc.CodeModule.AddFromString($cls)
-        Write-Host "Injected events: ThisDocument ($($thisDoc.CodeModule.CountOfLines) lines)"
+        if ($env:CF_SKIP_THISDOCUMENT -eq '1') {
+            Write-Host "Injected events: SKIPPED (diagnostic)"
+        }
+        else {
+            $thisDoc.CodeModule.AddFromString($cls)
+            Write-Host "Injected events: ThisDocument ($($thisDoc.CodeModule.CountOfLines) lines)"
+        }
+
+        # No compile attempt here. The VBE Compile command reports
+        # Enabled = $true but silently does nothing under automation, which
+        # makes it worse than useless as a gate. The real check runs after the
+        # save, by loading the template and calling a macro.
 
         $doc.Save()
         Write-Host "Saved."
-
-        # -----------------------------------------------------------------------
-        # Compile check
-        #
-        # Word happily saves a template whose VBA does not compile; it only
-        # complains later, as a modal "Compile error in hidden module" dialog
-        # that blocks every macro run. Compile here so a broken build fails
-        # loudly at build time instead.
-        # -----------------------------------------------------------------------
-        # When the project has errors, Word pops a modal dialog and Execute
-        # throws E_FAIL. The dialog is still on screen at that point, so
-        # read it in either case.
-        try {
-            [void]$word.VBE.CommandBars.FindControl(1, 578).Execute()   # Compile project
-        }
-        catch {
-            Write-Host "Compile command returned: $($_.Exception.Message)"
-        }
-
-        $compileErrors = [WordDialogs]::CollectAndDismiss()
-
-        if ($compileErrors) {
-            Write-Host ''
-            Write-Host 'COMPILE ERRORS:'
-            $compileErrors | ForEach-Object { Write-Host "  $_" }
-            throw 'ChatFormatter failed to compile; template not usable.'
-        }
-        Write-Host 'Compile: OK'
     }
     finally {
         $doc.Close([ref]0)      # 0 = wdDoNotSaveChanges
@@ -292,6 +273,92 @@ finally {
         Set-ItemProperty -Path $securityKey -Name AccessVBOM -Value $origAccessVBOM -Type DWord
     }
     Write-Host "AccessVBOM restored to: $origAccessVBOM"
+}
+
+# ---------------------------------------------------------------------------
+# Compile probe
+#
+# The VBE "Compile" command cannot be trusted as a gate. FindControl(1,578)
+# can return without compiling anything, and the dialog it raises is created
+# asynchronously, so sampling dialogs straight after Execute() races it. That
+# combination reported "Compile: OK" for a template that Word then refused to
+# run, which is worse than no check at all.
+#
+# Instead, load the built template into its own Word and call a macro: Run()
+# compiles the project for real. The probe runs as a separate, time boxed
+# process, so the modal "Compile error" dialog can never wedge the build and a
+# missing answer is itself a failure.
+# ---------------------------------------------------------------------------
+$probeResult = Join-Path $env:TEMP 'cf_compile_probe.txt'
+Remove-Item -LiteralPath $probeResult -Force -ErrorAction SilentlyContinue
+
+$p = Start-Process powershell.exe -PassThru -NoNewWindow `
+    -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass',
+        '-File', ('"' + (Join-Path $PSScriptRoot 'compile-probe.ps1') + '"'),
+        ('"' + $OutputPath + '"'),
+        ('"' + $probeResult + '"')
+    ) `
+    -RedirectStandardOutput (Join-Path $env:TEMP 'cf_probe_out.txt') `
+    -RedirectStandardError  (Join-Path $env:TEMP 'cf_probe_err.txt')
+
+$probeOk = $false
+$probeMsgs = @()
+$deadline = (Get-Date).AddSeconds(120)
+
+function Read-ProbeVerdict {
+    if (-not (Test-Path -LiteralPath $probeResult)) { return '' }
+    # ReadAllText, not Get-Content: the probe writes UTF8 with a BOM, so a
+    # regex anchored at ^OK would never match a Get-Content result.
+    try { return [System.IO.File]::ReadAllText($probeResult) } catch { return '' }
+}
+
+$probeOk = $false
+$probeMsgs = @()
+$deadline = (Get-Date).AddSeconds(120)
+
+while ((Get-Date) -lt $deadline) {
+    $verdict = Read-ProbeVerdict
+    if ($verdict -match '(?s)^\s*OK\b') { $probeOk = $true; break }
+    if ($verdict -match '(?s)^\s*(ERROR|FAILED)\b') { break }
+
+    # Dismiss whatever Word raises so the probe can never be wedged, but do
+    # not treat it as a verdict: the probe interprets its own dialogs and
+    # unrelated ones (activation, recovery) would otherwise fail a good build.
+    $dl = [WordDialogs]::CollectAndDismiss()
+    if ($dl) { $probeMsgs += $dl }
+
+    if ($p.HasExited) {
+        # The child writes its verdict just before exiting, so a read taken a
+        # moment ago can be empty or half written. Settle, then trust the file.
+        Start-Sleep -Milliseconds 400
+        if ((Read-ProbeVerdict) -match '(?s)^\s*OK\b') { $probeOk = $true }
+        break
+    }
+    Start-Sleep -Milliseconds 500
+}
+
+if (-not $p.HasExited) { try { $p.Kill() } catch { } }
+Start-Sleep -Milliseconds 600
+Get-Process WINWORD -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+if ($probeOk) {
+    Write-Host 'Compile: OK'
+}
+else {
+    Write-Host ''
+    Write-Host 'COMPILE ERRORS:'
+    if ($probeMsgs) {
+        $probeMsgs | ForEach-Object { Write-Host "  $_" }
+    }
+    elseif (Test-Path -LiteralPath $probeResult) {
+        [System.IO.File]::ReadAllText($probeResult).Trim() -split "`r?`n" |
+            ForEach-Object { Write-Host "  $_" }
+    }
+    else {
+        Write-Host '  compile probe produced no result (timed out after 120s)'
+    }
+    throw 'ChatFormatter failed to compile; template not usable.'
 }
 
 Write-Host ''
