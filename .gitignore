@@ -1,13 +1,10 @@
-# Build output that should never be committed
-*.tmp
-~$*.dotm
-~$*.doc*
-tools/out/
+# Release archives and their staging folders hold the sample document, so they
+# stay local. Push them as GitHub Release assets, not into the tree.
+dist/mac/
+dist/win/
+dist/*.zip
+sample.docx
 
-# The .dotm IS committed on purpose - it is what users download.
-# Only ignore build intermediates if you add any.
-
-# OS noise
-Thumbs.db
-desktop.ini
+__pycache__/
+*.pyc
 .DS_Store
