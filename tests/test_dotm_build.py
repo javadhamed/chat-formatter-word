@@ -68,12 +68,52 @@ def check_cfb_directory(cfb_bytes):
         dir_buf.extend(cfb_bytes[off:off + sec_sz])
         s = fat[s]
 
+    entries = []
     for i in range(0, len(dir_buf), 128):
         chunk = dir_buf[i:i + 128]
         kind = chunk[66]
+        if kind == 0:
+            entries.append(None)
+            continue
+        nlen = struct.unpack_from("<H", chunk, 64)[0]
+        name = chunk[:max(0, nlen - 2)].decode("utf-16-le", "replace")
+        color = chunk[67]
+        left, right, child = struct.unpack_from("<III", chunk, 68)
+        start = struct.unpack_from("<I", chunk, 116)[0]
         if kind == 1:  # storage (MS-CFB 2.6.3: start must be 0)
-            start = struct.unpack_from("<I", chunk, 116)[0]
             assert start == 0, f"storage entry {i // 128} has start={start:#x}, expected 0"
+        entries.append((name, kind, color, left, right, child))
+
+    def validate_rbtree(root_idx):
+        if root_idx == vbabuild.NOSTREAM:
+            return
+        assert entries[root_idx][2] == 1, f"RB root {entries[root_idx][0]} must be black"
+
+        def dfs(idx, parent_red):
+            if idx == vbabuild.NOSTREAM:
+                return 1, []
+            name, kind, color, left, right, child = entries[idx]
+            assert color in (0, 1), f"invalid color {color} for {name}"
+            if parent_red:
+                assert color == 1, f"adjacent red nodes at {name}"
+            bh_l, keys_l = dfs(left, color == 0)
+            bh_r, keys_r = dfs(right, color == 0)
+            assert bh_l == bh_r, f"unequal black-height at {name}: {bh_l} != {bh_r}"
+            key = (len(name), name.upper())
+            if keys_l:
+                assert keys_l[-1] < key, f"BST violation left of {name}"
+            if keys_r:
+                assert key < keys_r[0], f"BST violation right of {name}"
+            if kind == 1:
+                validate_rbtree(child)
+            return bh_l + (1 if color == 1 else 0), keys_l + [key] + keys_r
+
+        dfs(root_idx, False)
+
+    for ent in entries:
+        if ent and ent[1] == 5:
+            validate_rbtree(ent[5])
+            break
 
 
 def verify_dotm(path):
@@ -90,7 +130,7 @@ def verify_dotm(path):
                 "VBA/ChatFormatter", "VBA/ThisDocument"):
         assert req in streams, f"missing stream {req}"
 
-    assert streams["VBA/_VBA_PROJECT"] == b"\xcc\x61\xff\xff\x00", (
+    assert streams["VBA/_VBA_PROJECT"] == b"\xcc\x61\xff\xff\x00\xff\xff", (
         f"unexpected _VBA_PROJECT header: {streams['VBA/_VBA_PROJECT']!r}"
     )
 

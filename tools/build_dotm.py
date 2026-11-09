@@ -49,10 +49,11 @@ MODULES = {
     "ThisDocument": "ThisDocument.cls",
 }
 
-# MS-OVBA 2.3.4.1 uncompiled _VBA_PROJECT stream (Reserved1=0x61CC,
-# Version=0xFFFF, Reserved2=0x00, no PerformanceCache). Forces Word on every
-# platform to compile cleanly from source rather than executing stale p-code.
-UNCOMPILED_VBA_PROJECT = b"\xcc\x61\xff\xff\x00"
+# MS-OVBA 2.3.4.1 (Rev 1.0-5.0) uncompiled 7-byte _VBA_PROJECT stream:
+# Reserved1=0x61CC, Version=0xFFFF, Reserved2=0x00, Reserved3=0xFFFF.
+# VBE7.DLL reads 7 bytes (including Reserved3) before checking Version=0xFFFF;
+# a 5-byte stream hits EOF and causes Word to reject vbaProject.bin silently.
+UNCOMPILED_VBA_PROJECT = b"\xcc\x61\xff\xff\x00\xff\xff"
 
 
 def _read_seed_streams(vba_bin):
