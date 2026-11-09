@@ -38,7 +38,6 @@ def render_windows_installer(dotm_bytes):
 
     script = f"""@echo off
 setlocal EnableExtensions
-chcp 65001 >nul 2>&1
 
 REM ==============================================================
 REM   Chat Formatter for Word - Standalone Windows Installer
@@ -61,12 +60,14 @@ echo ==============================================================
 echo   Chat Formatter for Word - Standalone Installer (Windows)
 echo ==============================================================
 echo.
+echo   User: %USERNAME%
 
 REM --- 1. Extract & verify embedded ChatFormatter.dotm ------------
 echo [1/5] Preparing new ChatFormatter package...
 call :ExtractPayload
 if errorlevel 1 (
     echo [ERROR] Failed to extract or verify the embedded template.
+    echo         Make sure you downloaded the real .bat file ^(not an HTML page^).
     set "CF_EXIT=1"
     goto :Cleanup
 )
@@ -84,20 +85,15 @@ REM --- 3. Remove previous version completely ----------------------
 echo [3/5] Removing any previous version...
 set "DEFAULT_STARTUP=%APPDATA%\\Microsoft\\Word\\STARTUP"
 set "TARGET_STARTUP=%DEFAULT_STARTUP%"
+set "ACTIVE_VER="
 set "REG_STARTUP="
 
 call :CleanDir "%DEFAULT_STARTUP%"
-for %%V in (14.0 15.0 16.0) do (
-    for /f "tokens=2,*" %%A in ('reg query "HKCU\\Software\\Microsoft\\Office\\%%V\\Word\\Options" /v STARTUP-PATH 2^>nul ^| find /I "STARTUP-PATH"') do (
-        call set "REG_STARTUP=%%B"
-        call :CleanRegStartup
+for %%V in (16.0 15.0 14.0) do (
+    reg query "HKCU\\Software\\Microsoft\\Office\\%%V\\Word" >nul 2>&1
+    if not errorlevel 1 (
+        call :CheckVersionStartup "%%V"
     )
-)
-if defined REG_STARTUP (
-    if "%REG_STARTUP:~-1%"=="\\" set "REG_STARTUP=%REG_STARTUP:~0,-1%"
-)
-if defined REG_STARTUP (
-    if not "%REG_STARTUP%"=="" set "TARGET_STARTUP=%REG_STARTUP%"
 )
 
 set "CFHOME=%USERPROFILE%"
@@ -120,19 +116,33 @@ echo       Previous files and settings cleaned.
 
 REM --- 4. Install new version -------------------------------------
 echo [4/5] Installing new version to Word STARTUP...
+echo       Target folder: %TARGET_STARTUP%
 if not exist "%TARGET_STARTUP%" mkdir "%TARGET_STARTUP%" 2>nul
+if not exist "%TARGET_STARTUP%" (
+    echo       [WARN] Could not access %TARGET_STARTUP%, falling back to default STARTUP.
+    set "TARGET_STARTUP=%DEFAULT_STARTUP%"
+    if not exist "%TARGET_STARTUP%" mkdir "%TARGET_STARTUP%" 2>nul
+)
+if not exist "%TARGET_STARTUP%" (
+    echo [ERROR] Could not create STARTUP folder: %TARGET_STARTUP%
+    set "CF_EXIT=1"
+    goto :Cleanup
+)
 copy /Y "%CF_TMP_DOTM%" "%TARGET_STARTUP%\\%TEMPLATE_NAME%" >nul
 if errorlevel 1 (
     echo [ERROR] Copy failed. Close all Word windows and run this again.
     set "CF_EXIT=1"
     goto :Cleanup
 )
-if not exist "%TARGET_STARTUP%\\%TEMPLATE_NAME%" (
-    echo [ERROR] Installed file is missing at %TARGET_STARTUP%\\%TEMPLATE_NAME%.
+set "CF_INST_SIZE="
+for %%F in ("%TARGET_STARTUP%\\%TEMPLATE_NAME%") do set "CF_INST_SIZE=%%~zF"
+if not "%CF_INST_SIZE%"=="%CF_SIZE%" (
+    echo [ERROR] Installed file verification failed at:
+    echo         %TARGET_STARTUP%\\%TEMPLATE_NAME%
     set "CF_EXIT=1"
     goto :Cleanup
 )
-echo       OK -^> %TARGET_STARTUP%\\%TEMPLATE_NAME%
+echo       OK -^> %TARGET_STARTUP%\\%TEMPLATE_NAME% ^(%CF_INST_SIZE% bytes^)
 
 REM --- 5. Register trusted location and write fresh settings ------
 echo [5/5] Registering trusted location and default settings...
@@ -157,7 +167,9 @@ if not exist "%CFHOME%\\.chatformatter" mkdir "%CFHOME%\\.chatformatter" 2>nul
     echo AutoFormat = 1
     echo Tables = 1
 ) > "%CFHOME%\\.chatformatter\\settings.ini"
-echo       Created %CFHOME%\\.chatformatter\\settings.ini
+if exist "%CFHOME%\\.chatformatter\\settings.ini" (
+    echo       Created %CFHOME%\\.chatformatter\\settings.ini
+)
 
 echo.
 echo ==============================================================
@@ -168,10 +180,10 @@ echo   Installed: %TARGET_STARTUP%\\%TEMPLATE_NAME%
 echo.
 echo   How to use:
 echo     1. Open Word
-echo     2. Copy text from an AI chat (ChatGPT, DeepSeek, Gemini, ...)
+echo     2. Copy text from an AI chat ^(ChatGPT, DeepSeek, Gemini, ...^)
 echo     3. Paste into Word, select it, and RIGHT-CLICK
 echo.
-echo   Manual macros (Alt+F8): FormatChatText, ToggleAutoFormat, ShowSettings
+echo   Manual macros ^(Alt+F8^): FormatChatText, ToggleAutoFormat, ShowSettings
 echo.
 goto :Cleanup
 
@@ -183,24 +195,28 @@ if not errorlevel 1 (
     if not errorlevel 1 (
         if exist "%CF_TMP_DOTM%" exit /b 0
     )
+    echo       PowerShell decode skipped; trying certutil fallback...
 )
 
 REM Fallback when PowerShell is unavailable or restricted
-set "CF_IN_BLK="
-> "%CF_B64_TXT%" (
-    echo -----BEGIN CERTIFICATE-----
-    for /f "usebackq delims=" %%L in ("%CF_SELF%") do (
-        if "%%L"=="{END_MARKER}" set "CF_IN_BLK="
-        if defined CF_IN_BLK echo %%L
-        if "%%L"=="{BEGIN_MARKER}" set "CF_IN_BLK=1"
-    )
-    echo -----END CERTIFICATE-----
-)
+> "%CF_B64_TXT%" echo -----BEGIN CERTIFICATE-----
+findstr /R "^[A-Za-z0-9+/][A-Za-z0-9+/=]*$" "%CF_SELF%" >> "%CF_B64_TXT%"
+>> "%CF_B64_TXT%" echo -----END CERTIFICATE-----
+
 certutil -f -decode "%CF_B64_TXT%" "%CF_TMP_DOTM%" >nul 2>&1
 if errorlevel 1 exit /b 1
 set "CF_GOT_SIZE="
 for %%F in ("%CF_TMP_DOTM%") do set "CF_GOT_SIZE=%%~zF"
 if not "%CF_GOT_SIZE%"=="%CF_SIZE%" exit /b 1
+
+set "CF_HASH_LINE="
+for /f "skip=1 delims=" %%H in ('certutil -hashfile "%CF_TMP_DOTM%" SHA256 2^>nul') do (
+    if not defined CF_HASH_LINE set "CF_HASH_LINE=%%H"
+)
+if not defined CF_HASH_LINE exit /b 0
+set "CF_HASH_LINE=%CF_HASH_LINE: =%"
+echo "%CF_HASH_LINE%" | findstr /R "^\"[0-9A-Fa-f][0-9A-Fa-f]*\"$" >nul || exit /b 0
+if /I not "%CF_HASH_LINE%"=="%CF_SHA256%" exit /b 1
 exit /b 0
 
 :EnsureWordClosed
@@ -219,7 +235,7 @@ for /L %%I in (1,1,10) do (
         exit /b 0
     )
 )
-echo       Word is still open (you may have an unsaved document).
+echo       Word is still open ^(you may have an unsaved document^).
 :WordPrompt
 set "CF_ANS="
 set /p "CF_ANS=      Save/close Word then press Enter to retry, [F] to force-close, or [Q] to quit: "
@@ -233,8 +249,30 @@ if not errorlevel 1 goto :WordPrompt
 echo       Word closed.
 exit /b 0
 
-:CleanRegStartup
-if defined REG_STARTUP call :CleanDir "%REG_STARTUP%"
+:CheckVersionStartup
+set "CF_VER=%~1"
+set "CF_IS_ACTIVE="
+if not defined ACTIVE_VER (
+    set "ACTIVE_VER=%CF_VER%"
+    set "CF_IS_ACTIVE=1"
+)
+set "CF_CAND="
+for /f "tokens=2,*" %%A in ('reg query "HKCU\\Software\\Microsoft\\Office\\%CF_VER%\\Word\\Options" /v STARTUP-PATH 2^>nul ^| find /I "STARTUP-PATH"') do (
+    call set "CF_CAND=%%B"
+)
+if not defined CF_CAND exit /b 0
+set "CF_CAND=%CF_CAND:"=%"
+if "%CF_CAND%"=="" exit /b 0
+if "%CF_CAND:~-1%"=="\\" set "CF_CAND=%CF_CAND:~0,-1%"
+if "%CF_CAND%"=="" exit /b 0
+call :CleanDir "%CF_CAND%"
+if not defined CF_IS_ACTIVE exit /b 0
+if defined REG_STARTUP exit /b 0
+if "%CF_CAND:~1,1%"==":" (
+    if not exist "%CF_CAND:~0,3%" exit /b 0
+)
+set "REG_STARTUP=%CF_CAND%"
+set "TARGET_STARTUP=%CF_CAND%"
 exit /b 0
 
 :CleanDir
@@ -248,6 +286,10 @@ exit /b 0
 set "SECKEY=HKCU\\Software\\Microsoft\\Office\\%~1\\Word\\Security\\Trusted Locations"
 reg query "%SECKEY%" >nul 2>&1
 if errorlevel 1 reg add "%SECKEY%" /f >nul 2>&1
+set "CF_TPATH=%~2"
+if "%CF_TPATH:~0,2%"=="\\\\" (
+    reg add "%SECKEY%" /v AllowNetworkLocations /t REG_DWORD /d 1 /f >nul 2>&1
+)
 reg add "%SECKEY%\\LocationChatFormatter" /v Path /t REG_EXPAND_SZ /d "%~2" /f >nul 2>&1
 reg add "%SECKEY%\\LocationChatFormatter" /v Description /t REG_SZ /d "Chat Formatter for Word" /f >nul 2>&1
 reg add "%SECKEY%\\LocationChatFormatter" /v AllowSubfolders /t REG_DWORD /d 1 /f >nul 2>&1

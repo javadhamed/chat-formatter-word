@@ -28,10 +28,25 @@ def check_chunks(blob, label):
     while pos < len(blob):
         header = struct.unpack_from("<H", blob, pos)[0]
         sig = (header >> 12) & 0x07
+        flag = (header >> 15) & 1
         size = (header & 0x0FFF) + 3
         assert sig == 0b011, f"{label}: bad chunk signature {sig:#x} at {pos}"
         assert pos + size <= len(blob), f"{label}: truncated chunk at {pos}"
-        assert size <= 4096, f"{label}: chunk too big ({size} bytes)"
+        assert size <= 4098 if flag == 0 else size <= 4096, (
+            f"{label}: chunk too big ({size} bytes, flag={flag})"
+        )
+        plain = vbabuild.decompress(b"\x01" + blob[pos:pos + size])
+        is_last = (pos + size == len(blob))
+        if flag == 0:
+            assert size == 4098 and len(plain) == 4096, (
+                f"{label}: raw chunk must be 4096 bytes, got {len(plain)}"
+            )
+        elif not is_last:
+            assert len(plain) == 4096, (
+                f"{label}: non-final compressed chunk decompressed to {len(plain)} != 4096 (MS-OVBA 2.4.1.1.4)"
+            )
+        else:
+            assert len(plain) <= 4096, f"{label}: final chunk decompressed to {len(plain)} > 4096"
         pos += size
     assert pos == len(blob), f"{label}: trailing bytes after last chunk"
 
@@ -75,7 +90,7 @@ def verify_dotm(path):
                 "VBA/ChatFormatter", "VBA/ThisDocument"):
         assert req in streams, f"missing stream {req}"
 
-    assert streams["VBA/_VBA_PROJECT"] == b"\xcc\x61\xff\xff\x00\xff\xff", (
+    assert streams["VBA/_VBA_PROJECT"] == b"\xcc\x61\xff\xff\x00", (
         f"unexpected _VBA_PROJECT header: {streams['VBA/_VBA_PROJECT']!r}"
     )
 
@@ -209,6 +224,18 @@ def test_standalone_installers():
     assert m_win, "missing payload markers in ChatFormatter-Windows-Installer.bat"
     assert base64.b64decode(m_win.group(1)) == dotm_bytes
 
+    # Verify findstr certutil fallback extracts ONLY the base64 payload lines
+    before_payload = win_text.split("-----BEGIN CHATFORMATTER DOTM-----")[0]
+    for idx, line in enumerate(before_payload.splitlines(), 1):
+        assert not re.fullmatch(r"[A-Za-z0-9+/][A-Za-z0-9+/=]*", line), (
+            f"script line {idx} ({line!r}) would be matched by certutil findstr fallback"
+        )
+    b64_lines = [
+        ln for ln in win_text.splitlines()
+        if re.fullmatch(r"[A-Za-z0-9+/][A-Za-z0-9+/=]*", ln)
+    ]
+    assert base64.b64decode("".join(b64_lines)) == dotm_bytes
+
     # Verify macOS standalone installer matches template and runs end-to-end
     with open(mac_path, "rb") as fh:
         mac_raw = fh.read()
@@ -273,7 +300,23 @@ def test_versions_match():
     assert package_mac.VERSION == ver, f"package_mac.VERSION={package_mac.VERSION} != {ver}"
 
 
+def test_ovba_compression_roundtrip():
+    samples = [
+        b"",
+        b"x",
+        b"A" * 5000,
+        (b"Sub Foo()\r\n    MsgBox \"Hi\"\r\nEnd Sub\r\n") * 200,
+        os.urandom(4096),  # exercises raw 4096-byte fallback chunk
+    ]
+    for idx, sample in enumerate(samples):
+        comp = vbabuild.compress(sample)
+        check_chunks(comp, f"sample[{idx}]")
+        assert vbabuild.decompress(comp) == sample
+
+
 def main():
+    test_ovba_compression_roundtrip()
+    print("  PASS  MS-OVBA 4096-byte LZ77 + raw fallback round-trips verified")
     test_lint_catches_regressions()
     print("  PASS  lint_vba catches stray outside-procedure code and passes src/")
     test_rebuilt_dotm_matches_repo()
