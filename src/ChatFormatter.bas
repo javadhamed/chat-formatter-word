@@ -88,6 +88,7 @@ Public Sub FormatChatText()
     Dim doc As Document
     Dim resp As VbMsgBoxResult
 
+    EnsureAppHook
     If Documents.Count = 0 Then
         Notify "No document is open."
         Exit Sub
@@ -108,6 +109,7 @@ Public Sub FormatSelection()
     Dim doc As Document
     Dim rng As Range
 
+    EnsureAppHook
     If Documents.Count = 0 Then
         Notify "No document is open."
         Exit Sub
@@ -133,13 +135,16 @@ Public Sub CF_SilentFormat()
     Set rng = CurrentRange(doc)
     If rng Is Nothing Then Exit Sub
 
+    On Error GoTo Done
     mSilent = True
     RunPipeline doc, rng, (GetSetting("Tables", "1") = "1"), False
+Done:
     mSilent = False
 End Sub
 
 
 Public Sub ToggleAutoFormat()
+    EnsureAppHook
     If GetSetting("AutoFormat", "1") = "1" Then
         SetSetting "AutoFormat", "0"
         Notify "Auto-format mode disabled." & vbCrLf & _
@@ -155,6 +160,7 @@ End Sub
 Public Sub ShowSettings()
     Dim autoFmt As String, tables As String
 
+    EnsureAppHook
     If GetSetting("AutoFormat", "1") = "1" Then autoFmt = "Enabled" Else autoFmt = "Disabled"
     If GetSetting("Tables", "1") = "1" Then tables = "Enabled" Else tables = "Disabled"
 
@@ -168,6 +174,7 @@ End Sub
 Public Sub AutoExec()
     On Error Resume Next
     EnsureBullet
+    EnsureAppHook
     CreateToolbarButton False
     On Error GoTo 0
 End Sub
@@ -181,7 +188,16 @@ End Sub
 Public Sub AutoSetup()
     On Error Resume Next
     EnsureBullet
+    EnsureAppHook
     CreateToolbarButton True
+    On Error GoTo 0
+End Sub
+
+
+Private Sub EnsureAppHook()
+    On Error Resume Next
+    ThisDocument.HookApplication
+    Err.Clear
     On Error GoTo 0
 End Sub
 
@@ -199,8 +215,10 @@ End Sub
 ' Diagnostics: run the pipeline over the whole document with no dialogs.
 Public Sub CF_SilentTest()
     If Documents.Count = 0 Then Exit Sub
+    On Error GoTo Done
     mSilent = True
     RunPipeline ActiveDocument, ActiveDocument.Content, True, False
+Done:
     mSilent = False
 End Sub
 
@@ -210,6 +228,7 @@ End Sub
 '=======================================================================
 
 Public Sub CF_RightClickHandler(ByVal Target As Range)
+    Dim su As Boolean
     If mBusy Then Exit Sub
     If GetSetting("AutoFormat", "1") <> "1" Then Exit Sub
     If Documents.Count = 0 Then Exit Sub
@@ -219,10 +238,13 @@ Public Sub CF_RightClickHandler(ByVal Target As Range)
     ' Cheap heuristic so ordinary prose is left alone.
     If Not LooksLikeAIChat(Target.Text) Then Exit Sub
 
-    On Error Resume Next
+    On Error GoTo CleanExit
+    su = Application.ScreenUpdating
     Application.ScreenUpdating = False
     CF_SilentFormat
-    Application.ScreenUpdating = True
+CleanExit:
+    On Error Resume Next
+    Application.ScreenUpdating = su
     Err.Clear
     On Error GoTo 0
 End Sub
@@ -316,6 +338,7 @@ End Sub
 Private Sub RunPipeline(ByVal doc As Document, ByVal rng As Range, _
                         ByVal doTables As Boolean, ByVal notifyUser As Boolean)
     Dim pStart() As Long
+    Dim pEnd() As Long
     Dim pText() As String
     Dim blks() As Blk
     Dim nBlocks As Long
@@ -326,9 +349,9 @@ Private Sub RunPipeline(ByVal doc As Document, ByVal rng As Range, _
     Dim failed As Boolean
     Dim errNum As Long, errDesc As String
     Dim su As Boolean
-    Dim pagin As Boolean
-    Dim spell As Boolean
-    Dim gram As Boolean
+    Dim pagin As Boolean, hasPagin As Boolean
+    Dim spell As Boolean, hasSpell As Boolean
+    Dim gram As Boolean, hasGram As Boolean
 
     If mBusy Then Exit Sub
     If rng Is Nothing Then Exit Sub
@@ -336,21 +359,23 @@ Private Sub RunPipeline(ByVal doc As Document, ByVal rng As Range, _
     EnsureBullet
 
     ' One linear pass fills the snapshot and classifies the blocks.
-    nBlocks = ScanBlocks(rng, pStart, pText, blks)
+    nBlocks = ScanBlocks(rng, pStart, pEnd, pText, blks)
     If nBlocks = 0 Then
         If notifyUser Then Notify "There is nothing here to format."
         Exit Sub
     End If
-    nParas = UBound(pStart) - 1
+    nParas = UBound(pText)
 
     BeginRun nBlocks + 2
 
     su = Application.ScreenUpdating
     On Error Resume Next
     pagin = Application.Options.Pagination
+    hasPagin = (Err.Number = 0): Err.Clear
     spell = Application.Options.CheckSpellingAsYouType
+    hasSpell = (Err.Number = 0): Err.Clear
     gram = Application.Options.CheckGrammarAsYouType
-    Err.Clear
+    hasGram = (Err.Number = 0): Err.Clear
     On Error GoTo CleanUp
 
     Application.ScreenUpdating = False
@@ -374,8 +399,7 @@ Private Sub RunPipeline(ByVal doc As Document, ByVal rng As Range, _
     ' Back to front: replacing a block never moves a block still to visit.
     For i = nBlocks To 1 Step -1
         lo = pStart(blks(i).First)
-        hi = pStart(blks(i).Last + 1)
-        If blks(i).Last >= nParas Then hi = ClampEnd(doc, pStart(nParas + 1))
+        hi = ClampEnd(doc, pEnd(blks(i).Last))
         Beat "formatting"
         If hi > lo Then
             Select Case blks(i).Kind
@@ -399,9 +423,9 @@ CleanUp:
     On Error Resume Next
     If undoStarted Then Application.UndoRecord.EndCustomRecord
     Application.ScreenUpdating = su
-    Application.Options.Pagination = pagin
-    Application.Options.CheckSpellingAsYouType = spell
-    Application.Options.CheckGrammarAsYouType = gram
+    If hasPagin Then Application.Options.Pagination = pagin
+    If hasSpell Then Application.Options.CheckSpellingAsYouType = spell
+    If hasGram Then Application.Options.CheckGrammarAsYouType = gram
     Application.StatusBar = False
     If Not failed Then doc.Repaginate
     Err.Clear
@@ -429,16 +453,28 @@ Private Function ClampEnd(ByVal doc As Document, ByVal v As Long) As Long
 End Function
 
 
+Private Function ContentEndBeforeCr(ByVal doc As Document, ByVal lo As Long, ByVal hi As Long) As Long
+    Dim e As Long
+    e = hi
+    If e > lo Then
+        If doc.Range(e - 1, e).Text = vbCr Then e = e - 1
+    End If
+    ContentEndBeforeCr = e
+End Function
+
+
 '=======================================================================
 '  Snapshot and classification
 '
-'  Fills pStart(1..n+1) with paragraph offsets and pText(1..n) with raw
-'  paragraph text, then cuts the range into typed blocks.  Returns the
-'  block count.  This is the only pass that walks the live document.
+'  Fills pStart(1..n), pEnd(1..n) with paragraph offsets and pText(1..n)
+'  with raw paragraph text, then cuts the range into typed blocks.
+'  Returns the block count.  This is the only pass that walks the live
+'  document.
 '=======================================================================
 
 Private Function ScanBlocks(ByVal rng As Range, _
                             ByRef pStart() As Long, _
+                            ByRef pEnd() As Long, _
                             ByRef pText() As String, _
                             ByRef blks() As Blk) As Long
     Dim p As Paragraph
@@ -450,7 +486,13 @@ Private Function ScanBlocks(ByVal rng As Range, _
     Dim fenceLang As String
     Dim count As Long
 
-    ReDim pStart(1 To rng.Paragraphs.Count + 1)
+    If rng.Paragraphs.Count = 0 Then
+        ScanBlocks = 0
+        Exit Function
+    End If
+
+    ReDim pStart(1 To rng.Paragraphs.Count)
+    ReDim pEnd(1 To rng.Paragraphs.Count)
     ReDim pText(1 To rng.Paragraphs.Count)
     ReDim blks(1 To 32)
 
@@ -462,6 +504,7 @@ Private Function ScanBlocks(ByVal rng As Range, _
         If Not p.Range.Information(wdWithInTable) Then
             n = n + 1
             pStart(n) = p.Range.Start
+            pEnd(n) = p.Range.End
             pText(n) = p.Range.Text
             Beat "scanning"
         End If
@@ -470,9 +513,9 @@ Private Function ScanBlocks(ByVal rng As Range, _
         ScanBlocks = 0
         Exit Function
     End If
-    ReDim Preserve pStart(1 To n + 1)
+    ReDim Preserve pStart(1 To n)
+    ReDim Preserve pEnd(1 To n)
     ReDim Preserve pText(1 To n)
-    pStart(n + 1) = rng.End
 
     count = 0
     plainFrom = 1
@@ -493,13 +536,13 @@ Private Function ScanBlocks(ByVal rng As Range, _
             Loop
 
             If closeIdx = -1 Then
-                count = FlushPlain(blks, count, plainFrom, i - 1, pText)
-                count = AddBlock(blks, count, BK_CODE, i, n, lang, False)
+                count = FlushPlain(blks, count, plainFrom, i - 1, pStart, pEnd, pText)
+                count = AddBlock(blks, count, BK_CODE, i, n, fenceLang, False)
                 ScanBlocks = count
                 Exit Function
             End If
 
-            count = FlushPlain(blks, count, plainFrom, i - 1, pText)
+            count = FlushPlain(blks, count, plainFrom, i - 1, pStart, pEnd, pText)
 
             kind = BK_CODE
             If IsTsvLang(fenceLang) Then
@@ -514,7 +557,7 @@ Private Function ScanBlocks(ByVal rng As Range, _
         End If
     Loop
 
-    count = FlushPlain(blks, count, plainFrom, n, pText)
+    count = FlushPlain(blks, count, plainFrom, n, pStart, pEnd, pText)
     ScanBlocks = count
 End Function
 
@@ -524,33 +567,68 @@ End Function
 ' means the text pass never has to reason about table insertion.
 Private Function FlushPlain(ByRef blks() As Blk, ByVal count As Long, _
                             ByVal firstIdx As Long, ByVal lastIdx As Long, _
+                            ByRef pStart() As Long, ByRef pEnd() As Long, _
                             ByRef pText() As String) As Long
     Dim i As Long
     Dim runFrom As Long
     Dim s As String
+    Dim nextS As String
+    Dim dummy As String
+    Dim pairedSetext As Boolean
 
     i = firstIdx
     Do While i <= lastIdx
         s = CleanParaText(pText(i))
         If InStr(s, vbTab) > 0 And Len(s) > 0 And Not IsListMarked(s) Then
-            If runFrom = 0 Then runFrom = i
+            If runFrom = 0 Then
+                runFrom = i
+            ElseIf pEnd(i - 1) <> pStart(i) Then
+                count = AddBlock(blks, count, BK_TABRUN, runFrom, i - 1, "", True)
+                runFrom = i
+            End If
+            i = i + 1
         Else
             If runFrom > 0 Then
                 count = AddBlock(blks, count, BK_TABRUN, runFrom, i - 1, "", True)
                 runFrom = 0
             End If
-            If Len(s) = 0 Or IsFenceLine(s, s) Then
-                ' blank lines travel with the text that follows them
+            If Len(s) = 0 Or IsFenceLine(s, dummy) Then
+                i = i + 1
             Else
-                count = AddBlock(blks, count, BK_PLAIN, i, i, "", True)
+                pairedSetext = False
+                If i < lastIdx Then
+                    If pEnd(i) = pStart(i + 1) Then
+                        nextS = CleanParaText(pText(i + 1))
+                        If IsSetextLine(nextS) And IsSetextSubject(s) Then
+                            count = AddBlock(blks, count, BK_PLAIN, i, i + 1, "", True)
+                            i = i + 2
+                            pairedSetext = True
+                        End If
+                    End If
+                End If
+                If Not pairedSetext Then
+                    count = AddBlock(blks, count, BK_PLAIN, i, i, "", True)
+                    i = i + 1
+                End If
             End If
         End If
-        i = i + 1
     Loop
     If runFrom > 0 Then
         count = AddBlock(blks, count, BK_TABRUN, runFrom, lastIdx, "", True)
     End If
     FlushPlain = count
+End Function
+
+
+Private Function IsSetextSubject(ByVal s As String) As Boolean
+    Dim dummyNum As Long
+    If Len(s) = 0 Then Exit Function
+    If AtxLevel(s) > 0 Then Exit Function
+    If IsHorizontalRule(s) Then Exit Function
+    If Left$(s, 1) = ">" Then Exit Function
+    If IsBulletStart(s) Then Exit Function
+    If IsNumberedStart(s, dummyNum) Then Exit Function
+    IsSetextSubject = True
 End Function
 
 
@@ -615,7 +693,9 @@ Private Function IsListMarked(ByVal s As String) As Boolean
     If Len(head) = 0 Then Exit Function
     If head = ChrW$(&H2022) Then IsListMarked = True: Exit Function
     If InStr("-*+", Left$(head, 1)) > 0 And Len(head) = 1 Then IsListMarked = True: Exit Function
-    If IsNumeric(head) Then IsListMarked = True
+    If Len(head) >= 2 And Right$(head, 1) = "." Then
+        If IsAllDigits(Left$(head, Len(head) - 1)) Then IsListMarked = True
+    End If
 End Function
 
 
@@ -633,6 +713,7 @@ Private Sub ApplyCodeBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As 
                            ByRef b As Blk, ByRef pText() As String)
     Dim nBody As Long, i As Long
     Dim joined As String
+    Dim replaceEnd As Long
     Dim r As Range
 
     If b.Closed Then
@@ -651,7 +732,8 @@ Private Sub ApplyCodeBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As 
         Exit Sub
     End If
 
-    doc.Range(lo, hi).Text = joined
+    replaceEnd = ContentEndBeforeCr(doc, lo, hi)
+    doc.Range(lo, replaceEnd).Text = joined
     Set r = doc.Range(lo, lo + Len(joined))
     If r.End <= r.Start Then Exit Sub
 
@@ -682,7 +764,7 @@ End Sub
 Private Sub ApplyFenceWithBody(ByVal doc As Document, ByVal lo As Long, ByVal hi As Long, _
                                ByRef b As Blk, ByRef pText() As String, _
                                ByVal doTables As Boolean)
-    Dim nBody As Long, i As Long, a As Long, c As Long
+    Dim nBody As Long, i As Long, a As Long
     Dim runStart() As Long
     Dim runEnd() As Long
     Dim runText() As String
@@ -690,7 +772,6 @@ Private Sub ApplyFenceWithBody(ByVal doc As Document, ByVal lo As Long, ByVal hi
     Dim rTo() As Long
     Dim rTab() As Boolean
     Dim nRuns As Long
-    Dim joined As String
     Dim pos As Long
     Dim s As String
     Dim isTab As Boolean
@@ -698,6 +779,7 @@ Private Sub ApplyFenceWithBody(ByVal doc As Document, ByVal lo As Long, ByVal hi
     Dim shift As Long
     Dim cols As Long, rows As Long
     Dim data() As String
+    Dim endPos As Long
 
     If b.Closed Then
         nBody = b.Last - b.First - 1
@@ -723,13 +805,10 @@ Private Sub ApplyFenceWithBody(ByVal doc As Document, ByVal lo As Long, ByVal hi
         s = CleanParaText(pText(b.First + i))
         runText(i) = s
         runStart(i) = pos
-        pos = pos + Len(s) + 1
-        If i > 1 Then joined = joined & vbCr
-        joined = joined & s
+        pos = pos + Len(pText(b.First + i))
+        runEnd(i) = pos
     Next i
-    For i = 1 To nBody
-        runEnd(i) = runStart(i) + Len(runText(i)) + 1
-    Next i
+    If runEnd(nBody) > hi Then runEnd(nBody) = hi
 
     ' Group consecutive tab rows into table runs; everything else stays text.
     nRuns = 0
@@ -749,10 +828,14 @@ Private Sub ApplyFenceWithBody(ByVal doc As Document, ByVal lo As Long, ByVal hi
     Next i
 
     ' Deleting the opening fence pulls the whole body left by its length,
-    ' so the run offsets above have to follow before anything else is cut.
+    ' so the line and run offsets above have to follow before anything else is cut.
     shift = Len(pText(b.First))
     doc.Range(lo, runStart(1)).Delete
     If runEnd(nBody) < hi Then doc.Range(runEnd(nBody) - shift, hi - shift).Delete
+    For i = 1 To nBody
+        runStart(i) = runStart(i) - shift
+        runEnd(i) = runEnd(i) - shift
+    Next i
     For a = 1 To nRuns
         rFrom(a) = rFrom(a) - shift
         rTo(a) = rTo(a) - shift
@@ -784,14 +867,16 @@ Private Sub ApplyFenceWithBody(ByVal doc As Document, ByVal lo As Long, ByVal hi
                 doc.Range(rFrom(a), rTo(a)).Delete
                 BuildTableAt doc, rFrom(a), data, rows, cols
             End If
+        Else
+            endPos = ContentEndBeforeCr(doc, rFrom(a), rTo(a))
+            If endPos > rFrom(a) Then
+                On Error Resume Next
+                InlinePass doc.Range(rFrom(a), endPos)
+                Err.Clear
+                On Error GoTo 0
+            End If
         End If
     Next a
-
-    ' Prose inside the fence still wants its inline formatting.
-    On Error Resume Next
-    InlinePass doc.Range(lo, lo + Len(joined))
-    Err.Clear
-    On Error GoTo 0
 End Sub
 
 
@@ -857,6 +942,7 @@ Private Sub ApplyPlainBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As
     Dim outArg() As Long
     Dim raw As String, s As String
     Dim joined As String
+    Dim replaceEnd As Long
     Dim r As Range
     Dim p As Paragraph
     Dim idx As Long
@@ -886,16 +972,14 @@ Private Sub ApplyPlainBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As
                 outText(m) = Mid$(s, lvl + 2)
                 outKind(m) = LK_HEADING
                 outArg(m) = lvl
-            ElseIf m > 0 And IsSetextLine(s) Then
+            ElseIf m > 0 And IsSetextLine(s) And outKind(m) = LK_TEXT And _
+                   Len(outText(m)) > 0 And Not IsBulletOutput(outText(m)) Then
                 ' The line above this one becomes the heading.
                 outKind(m) = LK_HEADING
                 If Left$(s, 1) = "=" Then
                     outArg(m) = 1
-                ElseIf Not IsBulletOutput(outText(m)) Then
-                    outArg(m) = 2
                 Else
-                    outKind(m) = LK_TEXT
-                    outArg(m) = 0
+                    outArg(m) = 2
                 End If
             ElseIf IsHorizontalRule(s) Then
                 ' dropped entirely
@@ -928,12 +1012,17 @@ Private Sub ApplyPlainBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As
         Exit Sub
     End If
 
+    If m = 1 And outKind(1) = LK_TEXT And Not HasInlineMarkers(outText(1)) Then
+        Exit Sub
+    End If
+
     For i = 1 To m
         If i > 1 Then joined = joined & vbCr
         joined = joined & outText(i)
     Next i
 
-    doc.Range(lo, hi).Text = joined
+    replaceEnd = ContentEndBeforeCr(doc, lo, hi)
+    doc.Range(lo, replaceEnd).Text = joined
     Set r = doc.Range(lo, lo + Len(joined))
     If r.End <= r.Start Then Exit Sub
 
@@ -1058,11 +1147,33 @@ End Function
 ' Accepts "12. text" and reports the number.
 Private Function IsNumberedStart(ByVal s As String, ByRef num As Long) As Boolean
     Dim pos As Long
+    Dim prefix As String
     pos = InStr(s, ". ")
     If pos < 2 Or pos > 5 Then Exit Function
-    If Not IsNumeric(Left$(s, pos - 1)) Then Exit Function
-    num = CLng(Left$(s, pos - 1))
+    prefix = Left$(s, pos - 1)
+    If Not IsAllDigits(prefix) Then Exit Function
+    num = CLng(prefix)
     IsNumberedStart = True
+End Function
+
+
+Private Function IsAllDigits(ByVal s As String) As Boolean
+    Dim i As Long
+    Dim ch As String
+    If Len(s) = 0 Then Exit Function
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If ch < "0" Or ch > "9" Then Exit Function
+    Next i
+    IsAllDigits = True
+End Function
+
+
+Private Function HasInlineMarkers(ByVal s As String) As Boolean
+    If InStr(s, "*") > 0 Then HasInlineMarkers = True: Exit Function
+    If InStr(s, "~") > 0 Then HasInlineMarkers = True: Exit Function
+    If InStr(s, "`") > 0 Then HasInlineMarkers = True: Exit Function
+    If InStr(s, "[") > 0 And InStr(s, "](") > 0 Then HasInlineMarkers = True
 End Function
 
 
@@ -1350,6 +1461,9 @@ Private Function SettingsFile() As String
     If Len(base) = 0 Then base = Environ$("USERPROFILE")
     If Len(base) = 0 Then base = Environ$("TMPDIR")
     If Len(base) = 0 Then base = CurDir$
+    Do While Len(base) > 1 And Right$(base, 1) = Application.PathSeparator
+        base = Left$(base, Len(base) - 1)
+    Loop
     SettingsFile = base & Application.PathSeparator & ".chatformatter" & _
                    Application.PathSeparator & "settings.ini"
 End Function
@@ -1357,6 +1471,7 @@ End Function
 
 Private Function GetSetting(ByVal key As String, ByVal def As String) As String
     Dim f As Integer
+    Dim isOpen As Boolean
     Dim line As String
     Dim path As String
 
@@ -1364,6 +1479,7 @@ Private Function GetSetting(ByVal key As String, ByVal def As String) As String
     path = SettingsFile()
     f = FreeFile
     Open path For Input As #f
+    isOpen = True
     Do While Not EOF(f)
         Line Input #f, line
         If InStr(line, "=") > 0 Then
@@ -1375,8 +1491,10 @@ Private Function GetSetting(ByVal key As String, ByVal def As String) As String
         End If
     Loop
     Close #f
+    isOpen = False
 UseDefault:
     On Error Resume Next
+    If isOpen Then Close #f
     Err.Clear
     On Error GoTo 0
     GetSetting = def
@@ -1385,6 +1503,7 @@ End Function
 
 Private Sub SetSetting(ByVal key As String, ByVal val As String)
     Dim f As Integer
+    Dim isOpen As Boolean
     Dim path As String, dirPath As String
     Dim line As String
     Dim keep() As String
@@ -1398,11 +1517,13 @@ Private Sub SetSetting(ByVal key As String, ByVal val As String)
     dirPath = Left$(path, Len(path) - Len("settings.ini") - 1)
     If Len(Dir$(dirPath, vbDirectory)) = 0 Then MkDir dirPath
 
+    nKeep = 0
+    ReDim keep(1 To 64)
+
     If Len(Dir$(path)) > 0 Then
         f = FreeFile
         Open path For Input As #f
-        nKeep = 0
-        ReDim keep(1 To 64)
+        isOpen = True
         Do While Not EOF(f)
             Line Input #f, line
             If InStr(line, "=") > 0 Then
@@ -1416,6 +1537,7 @@ Private Sub SetSetting(ByVal key As String, ByVal val As String)
             End If
         Loop
         Close #f
+        isOpen = False
     End If
 
     If Not updated Then
@@ -1426,16 +1548,16 @@ Private Sub SetSetting(ByVal key As String, ByVal val As String)
 
     f = FreeFile
     Open path For Output As #f
+    isOpen = True
     For i = 1 To nKeep
         Print #f, keep(i)
     Next i
     Close #f
+    isOpen = False
 
 GiveUp:
     On Error Resume Next
+    If isOpen Then Close #f
     Err.Clear
     On Error GoTo 0
 End Sub
-
-
-ute VB_Name = "ChatFormatter"

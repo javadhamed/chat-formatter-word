@@ -16,7 +16,7 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 
 DIST = os.path.join(ROOT, "dist")
 STAGE = os.path.join(DIST, "win")
@@ -49,8 +49,11 @@ def main():
             raise SystemExit("missing: " + src)
         shutil.copyfile(src, os.path.join(STAGE, name))
 
-    # Keep the historical top-level copy in step with what ships.
-    shutil.copyfile(template, os.path.join(ROOT, TEMPLATE))
+    # Keep the historical top-level copy and standalone installers in step.
+    root_dotm = os.path.join(ROOT, TEMPLATE)
+    shutil.copyfile(template, root_dotm)
+    import build_installers
+    build_installers.build_all(dotm_path=root_dotm)
 
     zip_path = os.path.join(DIST, "ChatFormatter-Win-%s.zip" % VERSION)
     if os.path.exists(zip_path):

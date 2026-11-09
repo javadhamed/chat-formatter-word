@@ -8,9 +8,14 @@
 
 ## Install
 
-1. Unzip the download.
-2. Double-click **`install.command`**. If macOS refuses to open it, right-click
-   it and choose **Open**, then confirm.
+Both **`ChatFormatter-Mac-Installer.command`** (standalone single file) and
+**`install.command`** (inside the release ZIP) automatically remove any
+previous installation first, then install the latest template.
+
+1. Unzip the download (or download **`ChatFormatter-Mac-Installer.command`** directly).
+2. Double-click **`install.command`** (or **`ChatFormatter-Mac-Installer.command`**).
+   - If macOS says it lacks execute permission after downloading directly via a browser, run `chmod +x ~/Downloads/ChatFormatter-Mac-Installer.command` once in Terminal (or run `bash ~/Downloads/ChatFormatter-Mac-Installer.command`).
+   - If macOS refuses to open it, right-click it and choose **Open**, then confirm.
 3. Open Word. The first time, Word asks whether to enable the macros in the
    template — choose **Yes**. After that it loads silently on every launch.
 
@@ -113,9 +118,12 @@ English details are in the main `README.md`. فارسی همین راهنما د
 
 ## نصب
 
-۱. فایل زیپ را باز کنید.
-۲. روی **`install.command`** دوبار کلیک کنید. اگر macOS باز نکرد، راست‌کلیک
-   کنید و **Open** را بزنید.
+هر دو فایل **`ChatFormatter-Mac-Installer.command`** (تک‌فایلی مستقل) و **`install.command`** (داخل ZIP) به‌صورت خودکار ابتدا نسخهٔ قبلی را پاک کرده و سپس نسخهٔ جدید را نصب می‌کنند.
+
+۱. فایل زیپ را باز کنید (یا فایل **`ChatFormatter-Mac-Installer.command`** را مستقیم دانلود کنید).
+۲. روی **`install.command`** (یا **`ChatFormatter-Mac-Installer.command`**) دوبار کلیک کنید.
+   - اگر مرورگر اجازهٔ اجرا (`+x`) نداده بود، یک بار در Terminal بزنید `chmod +x ~/Downloads/ChatFormatter-Mac-Installer.command` یا `bash ~/Downloads/ChatFormatter-Mac-Installer.command`.
+   - اگر macOS باز نکرد، راست‌کلیک کنید و **Open** را بزنید.
 ۳. Word را باز کنید. بار اول از شما پرسیده می‌شود ماکروها فعال شوند؛ **Yes**
    را بزنید. بعد از آن هر بار خودکار بارگذاری می‌شود.
 

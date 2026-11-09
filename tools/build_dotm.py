@@ -36,18 +36,35 @@ import vbabuild  # noqa: E402
 try:
     import olefile
 except ImportError:  # pragma: no cover
-    sys.exit("This script needs 'olefile'.  pip install olefile")
+    olefile = None
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "src")
 SEED = os.path.join(ROOT, "tools", "seed.dotm")
 
-# Module stream name -> (source file, strip Attribute lines)
+# Module stream name -> source file
 MODULES = {
     "ChatFormatter": "ChatFormatter.bas",
     "ThisDocument": "ThisDocument.cls",
 }
+
+# MS-OVBA 2.3.4.1 uncompiled _VBA_PROJECT header (Version = 0xFFFF, no
+# PerformanceCache). Forces Word on every platform to compile from source
+# rather than executing stale p-code carried over from seed.dotm.
+UNCOMPILED_VBA_PROJECT = b"\xcc\x61\xff\xff\x00\xff\xff"
+
+
+def _read_seed_streams(vba_bin):
+    if olefile is not None:
+        ole = olefile.OleFileIO(io.BytesIO(vba_bin))
+        streams = {}
+        for entry in ole.listdir(streams=True, storages=False):
+            path = "/".join(entry)
+            if ole.get_type(path) == olefile.STGTY_STREAM:
+                streams[path] = ole.openstream(path).read()
+        return streams
+    return vbabuild.read_cfb(vba_bin)
 
 
 def read_source(name):
@@ -97,13 +114,7 @@ def build(output):
     if "word/vbaProject.bin" not in payload:
         sys.exit("Seed has no word/vbaProject.bin")
 
-    ole = olefile.OleFileIO(io.BytesIO(payload["word/vbaProject.bin"]))
-
-    streams = {}
-    for entry in ole.listdir(streams=True, storages=False):
-        path = "/".join(entry)
-        if ole.get_type(path) == olefile.STGTY_STREAM:
-            streams[path] = ole.openstream(path).read()
+    streams = _read_seed_streams(payload["word/vbaProject.bin"])
 
     if "VBA/dir" not in streams:
         sys.exit("Seed has no VBA/dir stream")
@@ -112,22 +123,21 @@ def build(output):
     offsets = vbabuild.parse_module_offsets(dir_plain)
     if not offsets:
         sys.exit("Could not read module offsets from VBA/dir")
-    print("  seed module offsets: %s" % offsets)
+    print("  seed module offsets: %s -> zeroed (compile from source)" % offsets)
+
+    dir_zeroed = vbabuild.zero_module_offsets(dir_plain)
 
     tree = {"PROJECT": streams.get("PROJECT", b""),
             "PROJECTwm": streams.get("PROJECTwm", b"")}
-    vba = {"dir": streams["VBA/dir"],
-           "_VBA_PROJECT": streams.get("VBA/_VBA_PROJECT", b"")}
+    vba = {"dir": vbabuild.compress(dir_zeroed),
+           "_VBA_PROJECT": UNCOMPILED_VBA_PROJECT}
 
     for module, filename in MODULES.items():
         src_path = os.path.join(SRC, filename)
         if not os.path.exists(src_path):
             sys.exit("Missing source: %s" % src_path)
         source = read_source(filename)
-        # Keep the existing performance cache so the TextOffset recorded in
-        # dir stays valid; only the compressed source that follows changes.
-        head = streams.get("VBA/" + module, b"")[:offsets.get(module, 0)]
-        vba[module] = head + vbabuild.compress(source)
+        vba[module] = vbabuild.compress(source)
         print("  %-16s source %6d bytes -> stream %6d bytes"
               % (module, len(source), len(vba[module])))
 
@@ -156,6 +166,10 @@ def main():
         out = os.path.join(ROOT, "ChatFormatter.dotm")
 
     build(out)
+    if os.path.abspath(out) == os.path.abspath(os.path.join(ROOT, "ChatFormatter.dotm")):
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import build_installers
+        build_installers.build_all(dotm_path=out)
 
 
 if __name__ == "__main__":
