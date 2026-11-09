@@ -246,6 +246,7 @@ class _Entry:
         self.name = name
         self.kind = kind                  # 5 root, 1 storage, 2 stream
         self.data = data
+        self.color = 1                    # 0 red, 1 black (MS-CFB 2.6.4)
         self.child = NOSTREAM
         self.left = NOSTREAM
         self.right = NOSTREAM
@@ -261,21 +262,24 @@ def _sort_key(entry):
 
 
 def _build_tree(entries):
-    """Balanced BST over CFB ordering; all nodes marked black."""
+    """Balanced Red-Black BST over CFB ordering per MS-CFB 2.6.4."""
     if not entries:
         return NOSTREAM
     ordered = sorted(entries, key=_sort_key)
+    max_depth = len(ordered).bit_length() - 1
+    is_full = (len(ordered) == (1 << (max_depth + 1)) - 1)
 
-    def build(lo, hi):
+    def build(lo, hi, depth):
         if lo > hi:
             return NOSTREAM
         mid = (lo + hi) // 2
         node = ordered[mid]
-        node.left = build(lo, mid - 1)
-        node.right = build(mid + 1, hi)
+        node.color = 0 if (not is_full and depth == max_depth) else 1
+        node.left = build(lo, mid - 1, depth + 1)
+        node.right = build(mid + 1, hi, depth + 1)
         return node.index
 
-    return build(0, len(ordered) - 1)
+    return build(0, len(ordered) - 1, 0)
 
 
 def write_cfb(tree):
@@ -365,7 +369,7 @@ def write_cfb(tree):
         dir_payload[off:off + len(raw)] = raw
         struct.pack_into("<H", dir_payload, off + 64, len(raw))
         dir_payload[off + 66] = e.kind
-        dir_payload[off + 67] = 1                    # black
+        dir_payload[off + 67] = e.color
         struct.pack_into("<III", dir_payload, off + 68,
                          e.left, e.right, e.child)
         struct.pack_into("<I", dir_payload, off + 116, e.start)
