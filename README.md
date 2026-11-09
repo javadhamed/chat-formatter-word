@@ -60,12 +60,12 @@ Download just the file for your operating system directly from this repository. 
 
 **Windows**
 
-1. Download **`ChatFormatter-Windows-Installer.bat`**
+1. Download [**`ChatFormatter-Windows-Installer.bat`**](ChatFormatter-Windows-Installer.bat)
 2. **Double-click `ChatFormatter-Windows-Installer.bat`** (if SmartScreen prompts, click *More info → Run anyway*)
 
 **macOS**
 
-1. Download **`ChatFormatter-Mac-Installer.command`**
+1. Download [**`ChatFormatter-Mac-Installer.command`**](ChatFormatter-Mac-Installer.command)
 2. **Double-click `ChatFormatter-Mac-Installer.command`**
    - If macOS says it lacks execute permission after downloading via a browser, run `chmod +x ~/Downloads/ChatFormatter-Mac-Installer.command` once in Terminal, or run `bash ~/Downloads/ChatFormatter-Mac-Installer.command`
    - If Gatekeeper asks, right-click the file and choose **Open**
@@ -233,12 +233,12 @@ MIT. See `LICENSE`.
 
 **ویندوز**
 
-۱. فایل **`ChatFormatter-Windows-Installer.bat`** را دانلود کنید
+۱. فایل [**`ChatFormatter-Windows-Installer.bat`**](ChatFormatter-Windows-Installer.bat) را دانلود کنید
 ۲. **روی `ChatFormatter-Windows-Installer.bat` دابل‌کلیک کنید** (در صورت نمایش پیام SmartScreen، روی *More info → Run anyway* بزنید)
 
 **مک**
 
-۱. فایل **`ChatFormatter-Mac-Installer.command`** را دانلود کنید
+۱. فایل [**`ChatFormatter-Mac-Installer.command`**](ChatFormatter-Mac-Installer.command) را دانلود کنید
 ۲. **روی `ChatFormatter-Mac-Installer.command` دابل‌کلیک کنید**
    - اگر مرورگر پس از دانلود اجازهٔ اجرا (`+x`) نداده بود، یک بار در Terminal دستور `chmod +x ~/Downloads/ChatFormatter-Mac-Installer.command` یا `bash ~/Downloads/ChatFormatter-Mac-Installer.command` را اجرا کنید
    - اگر پیام امنیتی macOS نمایش داده شد، روی فایل راست‌کلیک کرده و **Open** را بزنید

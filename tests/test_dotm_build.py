@@ -260,6 +260,19 @@ def test_standalone_installers():
             assert f.read() == "AutoFormat = 1\nTables = 1\n"
 
 
+def test_versions_match():
+    with open(os.path.join(ROOT, "src", "ChatFormatter.bas"), "r", encoding="utf-8") as fh:
+        bas = fh.read()
+    m = re.search(r'^Public Const CF_VERSION As String = "([^"]+)"', bas, re.M)
+    assert m, "CF_VERSION not found in ChatFormatter.bas"
+    ver = m.group(1)
+
+    import package_mac
+    import package_win
+    assert package_win.VERSION == ver, f"package_win.VERSION={package_win.VERSION} != {ver}"
+    assert package_mac.VERSION == ver, f"package_mac.VERSION={package_mac.VERSION} != {ver}"
+
+
 def main():
     test_lint_catches_regressions()
     print("  PASS  lint_vba catches stray outside-procedure code and passes src/")
@@ -267,6 +280,8 @@ def main():
     print("  PASS  ChatFormatter.dotm CFB/MS-OVBA/sources verified and reproducible")
     test_standalone_installers()
     print("  PASS  Windows & macOS standalone installers verified and tested end-to-end")
+    test_versions_match()
+    print("  PASS  package versions match CF_VERSION")
     return 0
 
 
