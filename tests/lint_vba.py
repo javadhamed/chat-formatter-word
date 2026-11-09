@@ -351,12 +351,37 @@ class Module:
                 self.problem.append(
                     "line %d: invalid module-level statement: %s" % (n, line.strip()))
 
+    def check_short_circuit_indexing(self):
+        """Flag `var > 0 And ... arr(var)` because VBA does not short-circuit."""
+        for n, line in enumerate(self.code, 1):
+            clean = re.sub(r'"[^"]*"', '""', line.lower())
+            # Split statements/clauses on `then` or `:` so `If n > 0 Then x = a And r(n)` is not conflated.
+            for expr in re.split(r"\bthen\b|:", clean):
+                if not re.search(r"\band\b", expr):
+                    continue
+                for m in re.finditer(r"\b([a-z_]\w*)\s*(?:>\s*0|>=\s*1|<>\s*0)\b", expr):
+                    var = m.group(1)
+                    tail = expr[m.end():]
+                    if not re.search(r"\band\b", tail):
+                        continue
+                    after_and = re.split(r"\band\b", tail, maxsplit=1)[1]
+                    # Look for arr(var) after `And` (not function calls like len(var))
+                    for idx_m in re.finditer(rf"\b([a-z_]\w*)\(\s*{re.escape(var)}\s*\)", after_and):
+                        callee = idx_m.group(1)
+                        if callee not in BUILTINS and callee not in KEYWORDS:
+                            self.problem.append(
+                                "line %d: VBA `And` does not short-circuit index guard for '%s(%s)'"
+                                % (n, callee, var)
+                            )
+                            break
+
     def report(self):
         self.collect()
         self.check_option_explicit()
         self.check_blocks()
         self.check_outside_procedures()
         self.check_undeclared()
+        self.check_short_circuit_indexing()
         return self.problem
 
 
