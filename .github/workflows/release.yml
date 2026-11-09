@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run VBA and packaging tests
+        run: |
+          python3 tests/lint_vba.py src/*.bas src/*.cls
+          python3 tests/test_cases.py
+          python3 tests/test_dotm_build.py
+
+      - name: Build Windows and macOS release archives
+        run: |
+          python3 tools/package_win.py
+          python3 tools/package_mac.py
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(sed -n 's/^Public Const CF_VERSION As String = "\([^"]*\)"/\1/p' src/ChatFormatter.bas)"
+          TAG="v${VERSION}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          ASSETS=(
+            "ChatFormatter-Windows-Installer.bat"
+            "ChatFormatter-Mac-Installer.command"
+            "dist/ChatFormatter-Win-${VERSION}.zip"
+            "dist/ChatFormatter-Mac-${VERSION}.zip"
+          )
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${ASSETS[@]}" --clobber
+          else
+            gh release create "${TAG}" \
+              --target "${GITHUB_SHA}" \
+              --title "Chat Formatter for Word ${TAG}" \
+              --notes "Download **ChatFormatter-Windows-Installer.bat** (Windows) or **ChatFormatter-Mac-Installer.command** (macOS) for standalone one-click install (automatically removes any previous version first), or use the ZIP packages below." \
+              "${ASSETS[@]}"
+          fi
