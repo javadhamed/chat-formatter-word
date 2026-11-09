@@ -251,13 +251,36 @@ End Sub
 
 
 Private Function LooksLikeAIChat(ByVal s As String) As Boolean
-    If Len(s) < 8 Then Exit Function
+    Dim lines() As String
+    Dim i As Long
+    Dim ln As String
+    Dim dummyNum As Long
+    Dim norm As String
+
+    If Len(s) < 3 Then Exit Function
     If InStr(s, "**") > 0 Then LooksLikeAIChat = True: Exit Function
+    If InStr(s, "~~") > 0 Then LooksLikeAIChat = True: Exit Function
+    If InStr(s, "`") > 0 Then LooksLikeAIChat = True: Exit Function
     If InStr(s, "##") > 0 Then LooksLikeAIChat = True: Exit Function
-    If InStr(s, FENCE) > 0 Then LooksLikeAIChat = True: Exit Function
-    If CountChar(s, "|") >= 2 And InStr(s, vbCr) > 0 Then LooksLikeAIChat = True: Exit Function
-    If CountChar(s, vbTab) >= 1 And InStr(s, vbCr) > 0 Then LooksLikeAIChat = True: Exit Function
-    If InStr(s, "- ") > 0 Or InStr(s, "> ") > 0 Then LooksLikeAIChat = True
+    If InStr(s, "[") > 0 And InStr(s, "](") > 0 Then LooksLikeAIChat = True: Exit Function
+
+    norm = Replace(Replace(s, vbCrLf, vbCr), vbLf, vbCr)
+    If CountChar(norm, "|") >= 2 And InStr(norm, vbCr) > 0 Then LooksLikeAIChat = True: Exit Function
+    If CountChar(norm, vbTab) >= 1 And InStr(norm, vbCr) > 0 Then LooksLikeAIChat = True: Exit Function
+
+    lines = Split(norm, vbCr)
+    For i = LBound(lines) To UBound(lines)
+        ln = CleanParaText(lines(i))
+        If Len(ln) > 0 Then
+            If AtxLevel(ln) > 0 Then LooksLikeAIChat = True: Exit Function
+            If IsBulletStart(ln) Then LooksLikeAIChat = True: Exit Function
+            If IsNumberedStart(ln, dummyNum) Then LooksLikeAIChat = True: Exit Function
+            If Left$(ln, 2) = "> " Then LooksLikeAIChat = True: Exit Function
+            If InStr(norm, vbCr) > 0 Then
+                If IsHorizontalRule(ln) Or IsSetextLine(ln) Then LooksLikeAIChat = True: Exit Function
+            End If
+        End If
+    Next i
 End Function
 
 
@@ -503,6 +526,11 @@ Private Function ScanBlocks(ByVal rng As Range, _
     For Each p In rng.Paragraphs
         If Not p.Range.Information(wdWithInTable) Then
             n = n + 1
+            If n > UBound(pStart) Then
+                ReDim Preserve pStart(1 To n * 2)
+                ReDim Preserve pEnd(1 To n * 2)
+                ReDim Preserve pText(1 To n * 2)
+            End If
             pStart(n) = p.Range.Start
             pEnd(n) = p.Range.End
             pText(n) = p.Range.Text
@@ -972,8 +1000,7 @@ Private Sub ApplyPlainBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As
                 outText(m) = Mid$(s, lvl + 2)
                 outKind(m) = LK_HEADING
                 outArg(m) = lvl
-            ElseIf m > 0 And IsSetextLine(s) And outKind(m) = LK_TEXT And _
-                   Len(outText(m)) > 0 And Not IsBulletOutput(outText(m)) Then
+            ElseIf IsSetextContinuation(s, m, outKind, outText) Then
                 ' The line above this one becomes the heading.
                 outKind(m) = LK_HEADING
                 If Left$(s, 1) = "=" Then
@@ -1012,8 +1039,10 @@ Private Sub ApplyPlainBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As
         Exit Sub
     End If
 
-    If m = 1 And outKind(1) = LK_TEXT And Not HasInlineMarkers(outText(1)) Then
-        Exit Sub
+    If m = 1 Then
+        If outKind(1) = LK_TEXT And Not HasInlineMarkers(outText(1)) Then
+            Exit Sub
+        End If
     End If
 
     For i = 1 To m
@@ -1064,6 +1093,20 @@ Private Sub ApplyPlainBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As
     Err.Clear
     On Error GoTo 0
 End Sub
+
+
+' VBA evaluates all operands of `And` (no short-circuiting), so check m >= 1
+' before indexing outKind(m) / outText(m).
+Private Function IsSetextContinuation(ByVal s As String, ByVal m As Long, _
+                                      ByRef outKind() As Long, _
+                                      ByRef outText() As String) As Boolean
+    If m < 1 Then Exit Function
+    If Not IsSetextLine(s) Then Exit Function
+    If outKind(m) <> LK_TEXT Then Exit Function
+    If Len(outText(m)) = 0 Then Exit Function
+    If IsBulletOutput(outText(m)) Then Exit Function
+    IsSetextContinuation = True
+End Function
 
 
 Private Sub ApplyHeading(ByVal p As Paragraph, ByVal level As Long)

@@ -174,6 +174,14 @@ def t_thematic_break_spaced():
 
 
 @case
+def t_hr_leading_and_standalone():
+    ok = eq(fmt(["---"]), [], "leading --- rule dropped cleanly")
+    ok &= eq(fmt(["==="]), [], "leading === rule dropped cleanly")
+    ok &= eq(fmt(["--"]), ["--"], "short -- stays text without crashing")
+    return ok
+
+
+@case
 def t_headings_around_table():
     src = ["# Title", "```tsv", "a\tb", "1\t2", "```", "tail"]
     out = fmt(src)

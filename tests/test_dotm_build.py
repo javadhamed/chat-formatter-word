@@ -158,6 +158,8 @@ def verify_dotm(path):
     assert not re.search(r"^ute\s+VB_Name", cf_text, re.M)
     assert 'CreateObject("WScript.Shell")' not in cf_text
     assert "HKCU\\Software\\ChatFormatter\\" not in cf_text
+    assert "IsSetextContinuation(" in cf_text
+    assert 'If InStr(s, "`") > 0 Then LooksLikeAIChat = True' in cf_text
 
     assert td_text.startswith('Attribute VB_Name = "ThisDocument"\r\n')
     assert "VERSION 1.0 CLASS" not in td_text
@@ -202,6 +204,28 @@ def test_lint_catches_regressions():
         )
     finally:
         os.unlink(bad_path)
+
+    with tempfile.NamedTemporaryFile("w", suffix=".bas", delete=False) as tf:
+        tf.write(
+            'Attribute VB_Name = "ShortCircuit"\n'
+            'Option Explicit\n'
+            'Public Sub Foo()\n'
+            '    Dim m As Long\n'
+            '    Dim outKind() As Long\n'
+            '    ReDim outKind(1 To 2)\n'
+            '    If m > 0 And outKind(m) = 1 Then\n'
+            '    End If\n'
+            'End Sub\n'
+        )
+        sc_path = tf.name
+    try:
+        mod = lint_vba.Module(sc_path)
+        probs = mod.report()
+        assert any("short-circuit" in p for p in probs), (
+            f"expected short-circuit lint failure, got {probs}"
+        )
+    finally:
+        os.unlink(sc_path)
 
 
 def test_rebuilt_dotm_matches_repo():
