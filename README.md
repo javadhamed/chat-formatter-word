@@ -54,17 +54,24 @@ Header rows are bold, shaded, and repeat across page breaks. Tables stretch to p
 
 ### Install
 
+**Standalone single-file installers (recommended — no ZIP needed):**
+
+Download just the file for your operating system directly from this repository. Both installers **automatically uninstall any previous version first** (old templates, lock files, legacy registry entries, and old settings) and then install the latest `ChatFormatter.dotm`.
+
 **Windows**
 
-1. Download the latest release ZIP from the [Releases page](../../releases)
-2. Extract it anywhere
-3. **Double-click `install.bat`**
+1. Download [**`ChatFormatter-Windows-Installer.bat`**](ChatFormatter-Windows-Installer.bat)
+2. **Double-click `ChatFormatter-Windows-Installer.bat`** (if SmartScreen prompts, click *More info → Run anyway*)
 
 **macOS**
 
-1. Download and unzip the release
-2. **Double-click `install.command`** — if macOS refuses to open it, right-click it and choose **Open**
+1. Download [**`ChatFormatter-Mac-Installer.command`**](ChatFormatter-Mac-Installer.command)
+2. **Double-click `ChatFormatter-Mac-Installer.command`**
+   - If macOS says it lacks execute permission after downloading via a browser, run `chmod +x ~/Downloads/ChatFormatter-Mac-Installer.command` once in Terminal, or run `bash ~/Downloads/ChatFormatter-Mac-Installer.command`
+   - If Gatekeeper asks, right-click the file and choose **Open**
 3. Open Word and answer **Yes** the first time it asks to enable the macros
+
+*(Alternatively, you can download a release ZIP from [Releases](../../releases), extract it, and run `install.bat` on Windows or `install.command` on macOS — those also clean up any previous version first.)*
 
 Both copy `ChatFormatter.dotm` into Word's `STARTUP` folder, so Word loads it as a global add-in on every launch. The Windows installer also registers that folder as a trusted location so macros run without security prompts.
 
@@ -105,20 +112,22 @@ Run **`uninstall.bat`** (Windows) or **`uninstall.command`** (macOS). It removes
 
 ### Build from Source
 
-The `.dotm` is committed so most users never need this. To rebuild after editing the VBA:
+The `.dotm` and standalone installers are committed so most users never need this. To rebuild after editing the VBA:
 
 ```
+python3 tools/build_dotm.py      # rebuilds ChatFormatter.dotm + both standalone installers
 python3 tools/package_win.py     # dist/win/ and dist/ChatFormatter-Win-<version>.zip
 python3 tools/package_mac.py     # dist/mac/ and dist/ChatFormatter-Mac-<version>.zip
 ```
 
-Needs Python 3 and `olefile` (`pip install olefile`). The build writes the VBA project into a copy of `tools/seed.dotm` using a pure-Python MS-OVBA writer, so **it needs neither Word nor PowerShell** and runs identically on every platform. The template is platform neutral: the same `.dotm` ships to Windows and macOS, only the installer differs.
+Needs only Python 3 (`olefile` is optional). The build writes the VBA project into a copy of `tools/seed.dotm` using a pure-Python MS-OVBA writer, so **it needs neither Word nor PowerShell** and runs identically on every platform. The template is platform neutral: the same `.dotm` ships to Windows and macOS, only the installer differs.
 
 Check the result before shipping:
 
 ```
 python3 tests/lint_vba.py src/ChatFormatter.bas src/ThisDocument.cls
 python3 tests/test_cases.py
+python3 tests/test_dotm_build.py
 python3 tests/test_sample.py
 python3 tests/test_word_output.py <original.docx> <formatted.docx>
 ```
@@ -130,17 +139,20 @@ python3 tests/test_word_output.py <original.docx> <formatted.docx>
 ### Repository Layout
 
 ```
-install.bat              one-click installer (Windows)
-uninstall.bat            one-click uninstaller (Windows)
-packaging/mac/           install.command, uninstall.command, README-mac.md
-ChatFormatter.dotm       compiled template (what Word loads)
-src/ChatFormatter.bas    all formatting logic, one linear pass
-src/ThisDocument.cls     event handlers for auto-format
-tools/vbabuild.py        MS-OVBA compressor and CFB writer
-tools/build_dotm.py      injects src/ into tools/seed.dotm
-tools/package_win.py     builds the Windows release ZIP
-tools/package_mac.py     builds the macOS release ZIP
-tests/                   reference model and test suites
+ChatFormatter-Windows-Installer.bat  standalone self-contained installer (Windows)
+ChatFormatter-Mac-Installer.command  standalone self-contained installer (macOS)
+install.bat                          ZIP-mode installer (Windows)
+uninstall.bat                        one-click uninstaller (Windows)
+packaging/mac/                       install.command, uninstall.command, README-mac.md
+ChatFormatter.dotm                   compiled template (what Word loads)
+src/ChatFormatter.bas                all formatting logic, one linear pass
+src/ThisDocument.cls                 event handlers for auto-format
+tools/vbabuild.py                    MS-OVBA compressor and CFB writer/reader
+tools/build_dotm.py                  injects src/ into tools/seed.dotm
+tools/build_installers.py            embeds ChatFormatter.dotm into standalone installers
+tools/package_win.py                 builds the Windows release ZIP
+tools/package_mac.py                 builds the macOS release ZIP
+tests/                               reference model and test suites
 ```
 
 ---
@@ -215,17 +227,24 @@ MIT. See `LICENSE`.
 
 ### نصب
 
+**نصب‌کننده‌های تک‌فایلی مستقل (پیشنهادی — بدون نیاز به فایل ZIP):**
+
+فقط فایل مخصوص سیستم‌عامل خود را مستقیماً از همین مخزن دانلود و اجرا کنید. هر دو فایل به‌صورت خودکار **ابتدا نسخهٔ قبلی را به‌طور کامل پاک می‌کنند** (فایل‌های قدیمی، فایل‌های قفل، کلیدهای رجیستری قدیمی و تنظیمات قبلی) و سپس نسخهٔ جدید `ChatFormatter.dotm` را نصب می‌نمایند.
+
 **ویندوز**
 
-۱. آخرین ZIP منتشر شده را از [صفحه Releases](../../releases) دانلود کنید
-۲. آن را در محل دلخواه استخراج کنید
-۳. **روی `install.bat` دابل‌کلیک کنید**
+۱. فایل [**`ChatFormatter-Windows-Installer.bat`**](ChatFormatter-Windows-Installer.bat) را دانلود کنید
+۲. **روی `ChatFormatter-Windows-Installer.bat` دابل‌کلیک کنید** (در صورت نمایش پیام SmartScreen، روی *More info → Run anyway* بزنید)
 
 **مک**
 
-۱. فایل زیپ را دانلود و باز کنید
-۲. **روی `install.command` دابل‌کلیک کنید** — اگر مک باز نکرد، راست‌کلیک کنید و **Open** را بزنید
+۱. فایل [**`ChatFormatter-Mac-Installer.command`**](ChatFormatter-Mac-Installer.command) را دانلود کنید
+۲. **روی `ChatFormatter-Mac-Installer.command` دابل‌کلیک کنید**
+   - اگر مرورگر پس از دانلود اجازهٔ اجرا (`+x`) نداده بود، یک بار در Terminal دستور `chmod +x ~/Downloads/ChatFormatter-Mac-Installer.command` یا `bash ~/Downloads/ChatFormatter-Mac-Installer.command` را اجرا کنید
+   - اگر پیام امنیتی macOS نمایش داده شد، روی فایل راست‌کلیک کرده و **Open** را بزنید
 ۳. ورد را باز کنید و بار اول، وقتی پرسید ماکروها فعال شوند، **Yes** را بزنید
+
+*(در صورت استفاده از فایل ZIP در صفحه [Releases](../../releases)، پس از استخراج، `install.bat` روی ویندوز یا `install.command` روی مک نیز به‌طور خودکار ابتدا نسخهٔ قبلی را پاک و سپس نسخهٔ جدید را نصب می‌کنند.)*
 
 در هر دو سیستم `ChatFormatter.dotm` در پوشه `STARTUP` ورد کپی می‌شود، پس ورد آن را در هر اجرا به‌عنوان یک add-in سراسری بارگذاری می‌کند. نصب‌کنندهٔ ویندوز آن پوشه را هم به‌عنوان Trusted Location ثبت می‌کند تا ماکروها بدون پرامپت امنیتی اجرا شوند.
 
@@ -267,20 +286,22 @@ MIT. See `LICENSE`.
 
 ### ساخت از کد منبع
 
-فایل `.dotm` در مخزن ذخیره شده است بنابراین اکثر کاربران نیازی به ساخت ندارند. برای بازسازی پس از ویرایش VBA:
+فایل `.dotm` و نصب‌کننده‌های مستقل در مخزن ذخیره شده‌اند بنابراین اکثر کاربران نیازی به ساخت ندارند. برای بازسازی پس از ویرایش VBA:
 
 ```
+python3 tools/build_dotm.py      # بازسازی ChatFormatter.dotm و هر دو فایل اجرایی نصب
 python3 tools/package_win.py     # dist/win/ و dist/ChatFormatter-Win-<version>.zip
 python3 tools/package_mac.py     # dist/mac/ و dist/ChatFormatter-Mac-<version>.zip
 ```
 
-به پایتون ۳ و `olefile` (`pip install olefile`) نیاز دارد. بیلد، پروژهٔ VBA را با یک نویسندهٔ خالص پایتونی MS-OVBA داخل کپی‌ای از `tools/seed.dotm` می‌نویسد؛ بنابراین **نه به ورد نیاز دارد و نه به PowerShell** و روی همهٔ سیستم‌ها یکسان کار می‌کند. خودِ قالب مستقل از پلتفرم است: همان `.dotm` برای ویندوز و مک ارسال می‌شود و فقط نصب‌کننده فرق می‌کند.
+فقط به پایتون ۳ نیاز دارد (`olefile` اختیاری است). بیلد، پروژهٔ VBA را با یک نویسندهٔ خالص پایتونی MS-OVBA داخل کپی‌ای از `tools/seed.dotm` می‌نویسد؛ بنابراین **نه به ورد نیاز دارد و نه به PowerShell** و روی همهٔ سیستم‌ها یکسان کار می‌کند. خودِ قالب مستقل از پلتفرم است: همان `.dotm` برای ویندوز و مک ارسال می‌شود و فقط نصب‌کننده فرق می‌کند.
 
 قبل از انتشار بررسی کنید:
 
 ```
 python3 tests/lint_vba.py src/ChatFormatter.bas src/ThisDocument.cls
 python3 tests/test_cases.py
+python3 tests/test_dotm_build.py
 python3 tests/test_sample.py
 python3 tests/test_word_output.py <original.docx> <formatted.docx>
 ```
@@ -292,17 +313,20 @@ python3 tests/test_word_output.py <original.docx> <formatted.docx>
 ### چیدمان مخزن
 
 ```
-install.bat              نصب‌کننده یک‌کلیک (ویندوز)
-uninstall.bat            حذف‌کننده یک‌کلیک (ویندوز)
-packaging/mac/           install.command، uninstall.command، README-mac.md
-ChatFormatter.dotm       قالب کامپایل‌شده (چه چیزی ورد بارگذاری می‌کند)
-src/ChatFormatter.bas    کل منطق قالب‌بندی، در یک پاس خطی
-src/ThisDocument.cls     هندلرهای رویداد برای قالب‌بندی خودکار
-tools/vbabuild.py        فشرده‌ساز MS-OVBA و نویسندهٔ CFB
-tools/build_dotm.py      تزریق src/ به tools/seed.dotm
-tools/package_win.py     ساخت ZIP نسخهٔ ویندوز
-tools/package_mac.py     ساخت ZIP نسخهٔ مک
-tests/                   مدل مرجع و مجموعه تست‌ها
+ChatFormatter-Windows-Installer.bat  نصب‌کننده مستقل و تک‌فایلی (ویندوز)
+ChatFormatter-Mac-Installer.command  نصب‌کننده مستقل و تک‌فایلی (مک)
+install.bat                          نصب‌کننده نسخه ZIP (ویندوز)
+uninstall.bat                        حذف‌کننده یک‌کلیک (ویندوز)
+packaging/mac/                       install.command، uninstall.command، README-mac.md
+ChatFormatter.dotm                   قالب کامپایل‌شده (چه چیزی ورد بارگذاری می‌کند)
+src/ChatFormatter.bas                کل منطق قالب‌بندی، در یک پاس خطی
+src/ThisDocument.cls                 هندلرهای رویداد برای قالب‌بندی خودکار
+tools/vbabuild.py                    فشرده‌ساز MS-OVBA و نویسنده/خواننده CFB
+tools/build_dotm.py                  تزریق src/ به tools/seed.dotm
+tools/build_installers.py            ساخت فایل‌های نصب مستقل از روی ChatFormatter.dotm
+tools/package_win.py                 ساخت ZIP نسخهٔ ویندوز
+tools/package_mac.py                 ساخت ZIP نسخهٔ مک
+tests/                               مدل مرجع و مجموعه تست‌ها
 ```
 
 ---

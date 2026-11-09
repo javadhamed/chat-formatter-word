@@ -13,7 +13,7 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 
 DIST = os.path.join(ROOT, "dist")
 STAGE = os.path.join(DIST, "mac")
@@ -67,8 +67,11 @@ def main():
             z.write(os.path.join(STAGE, name), os.path.join(FOLDER, name))
 
     # The template is platform neutral, so keep the historical top-level copy
-    # in step with what ships.
-    shutil.copyfile(template, os.path.join(ROOT, TEMPLATE))
+    # and standalone installers in step with what ships.
+    root_dotm = os.path.join(ROOT, TEMPLATE)
+    shutil.copyfile(template, root_dotm)
+    import build_installers
+    build_installers.build_all(dotm_path=root_dotm)
 
     print()
     print("package ready")

@@ -200,7 +200,7 @@ class Module:
             if not part:
                 continue
             part = re.sub(r"^(?:optional\s+|paramarray\s+)", "", part)
-            part = re.sub(r"^(?:byval\s+|byref\s+)", "", part)
+            part = re.sub(r"^(?:byval\s+|byref\s+|withevents\s+)", "", part)
             head = part.split(" as ")[0].strip()
             head = head.strip()
             if re.match(r"^\w+$", head):
@@ -303,10 +303,59 @@ class Module:
             # find/select on undefined members is out of scope
         return known
 
+    def check_outside_procedures(self):
+        """Flag executable or stray statements outside procedures/declarations."""
+        in_proc = False
+        in_type = False
+        in_header_block = False
+        seen_proc = False
+        header_re = re.compile(
+            r"^(?:version\s+[\d.]+\s+class|begin|end|multiuse\s*=|"
+            r"attribute\s+|option\s+|#)"
+        )
+        decl_re = re.compile(
+            r"^(?:public |private |global |friend )?"
+            r"(?:dim |static |const |declare |type |enum |withevents |event )"
+            r"|^(?:public|private)\s+\w+\s+as\s+"
+        )
+        for n, line in enumerate(self.code, 1):
+            low = line.strip().lower()
+            if not low:
+                continue
+            if low == "begin":
+                in_header_block = True
+                continue
+            if in_header_block:
+                if low == "end":
+                    in_header_block = False
+                continue
+            if re.match(r"^(?:public |private |friend )?(?:sub|function|property\s+\w+)\s+\w+", low):
+                in_proc = True
+                seen_proc = True
+                continue
+            if re.match(r"^end (?:sub|function|property)\b", low):
+                in_proc = False
+                continue
+            if re.match(r"^(?:public |private )?type\s+\w+\s*$", low):
+                in_type = True
+                continue
+            if re.match(r"^end type\b", low):
+                in_type = False
+                continue
+            if in_proc or in_type:
+                continue
+            if seen_proc:
+                self.problem.append(
+                    "line %d: statement outside procedure: %s" % (n, line.strip()))
+            elif not (header_re.match(low) or decl_re.match(low)):
+                self.problem.append(
+                    "line %d: invalid module-level statement: %s" % (n, line.strip()))
+
     def report(self):
         self.collect()
         self.check_option_explicit()
         self.check_blocks()
+        self.check_outside_procedures()
         self.check_undeclared()
         return self.problem
 

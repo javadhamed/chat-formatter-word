@@ -101,14 +101,8 @@ def decompress(data):
 # written at exactly the same place inside the module stream.
 # ---------------------------------------------------------------------------
 
-def parse_module_offsets(dir_stream):
-    """Return {module_stream_name: text_offset} from a decompressed dir.
-
-    Everything before PROJECTMODULES is skipped by scanning for record 0x000F,
-    which is cheap and safe: the type library references in between have
-    variable-length records that we do not need to understand.  From there on
-    the layout is fixed by MS-OVBA 2.3.4.2 and is parsed precisely.
-    """
+def _module_offset_locations(dir_stream):
+    """Return [(module_stream_name, text_offset_pos, text_offset)] from dir."""
     n = len(dir_stream)
     pos = -1
     for i in range(n - 6):
@@ -120,13 +114,13 @@ def parse_module_offsets(dir_stream):
         pos = i + 8
         break
     if pos < 0:
-        return {}
+        return []
 
-    result = {}
+    result = []
     # PROJECTCOOKIE
     rec_id, size = struct.unpack_from("<HI", dir_stream, pos)
     if rec_id != 0x0013:
-        return {}
+        return []
     pos += 6 + size
 
     def sized(at):
@@ -138,7 +132,6 @@ def parse_module_offsets(dir_stream):
         rid, sz, cur = sized(pos)
         if rid != 0x0019:
             return result
-        module_name = dir_stream[cur:cur + sz].decode("latin-1")
         pos = cur + sz
         # MODULENAMEUNICODE
         rid, sz, cur = sized(pos)
@@ -164,7 +157,7 @@ def parse_module_offsets(dir_stream):
         rid, sz, cur = sized(pos)
         if rid != 0x0031:
             return result
-        result[stream_name] = struct.unpack_from("<I", dir_stream, cur)[0]
+        result.append((stream_name, cur, struct.unpack_from("<I", dir_stream, cur)[0]))
         pos = cur + sz
         # remaining per-module records up to the 0x002B terminator
         while pos + 6 <= n:
@@ -173,8 +166,28 @@ def parse_module_offsets(dir_stream):
                 pos += 6 + sz
                 break
             pos += 6 + sz
-        module_name = module_name
     return result
+
+
+def parse_module_offsets(dir_stream):
+    """Return {module_stream_name: text_offset} from a decompressed dir."""
+    return {name: off for name, _, off in _module_offset_locations(dir_stream)}
+
+
+def zero_module_offsets(dir_stream):
+    """Return a copy of decompressed dir with every MODULEOFFSET set to 0.
+
+    When PerformanceCache is stripped from the module streams and _VBA_PROJECT
+    is reset to uncompiled, TextOffset must be 0 so Word compiles cleanly from
+    CompressedSourceCode instead of reading stale p-code.
+    """
+    buf = bytearray(dir_stream)
+    locs = _module_offset_locations(dir_stream)
+    if not locs:
+        raise ValueError("Could not locate module offsets in dir stream")
+    for _, cur, _ in locs:
+        struct.pack_into("<I", buf, cur, 0)
+    return bytes(buf)
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +258,7 @@ def write_cfb(tree):
                 node = _Entry(name, 1)
                 node.index = len(entries)
                 node.parent = parent
+                node.start = 0
                 entries.append(node)
                 storages[id(node)] = node
                 add(node, value)
@@ -356,3 +370,108 @@ def write_cfb(tree):
                          fat_first + i if i < n_fat else FREESECT)
 
     return bytes(header) + b"".join(sectors)
+
+
+def read_cfb(data):
+    """Minimal OLE compound file reader -> {stream_path: bytes}."""
+    if len(data) < 512 or data[:8] != b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+        raise ValueError("not an OLE compound file")
+
+    sector_shift, mini_shift = struct.unpack_from("<HH", data, 30)
+    sec_sz = 1 << sector_shift
+    mini_sz = 1 << mini_shift
+    num_fat, dir_start = struct.unpack_from("<II", data, 44)
+    mini_cutoff, minifat_start = struct.unpack_from("<II", data, 56)
+    difat_start, difat_count = struct.unpack_from("<II", data, 68)
+
+    def get_sec(idx):
+        off = (idx + 1) * sec_sz
+        return data[off:off + sec_sz]
+
+    fat_sectors = [s for s in struct.unpack_from("<109I", data, 76) if s < 0xFFFFFFFC]
+    cur_difat = difat_start
+    for _ in range(difat_count):
+        if cur_difat >= 0xFFFFFFFC:
+            break
+        buf = get_sec(cur_difat)
+        ints = struct.unpack("<" + "I" * (sec_sz // 4), buf)
+        fat_sectors.extend(s for s in ints[:-1] if s < 0xFFFFFFFC)
+        cur_difat = ints[-1]
+
+    fat = []
+    for s in fat_sectors[:num_fat]:
+        fat.extend(struct.unpack("<" + "I" * (sec_sz // 4), get_sec(s)))
+
+    def read_chain(start):
+        out = bytearray()
+        s = start
+        seen = set()
+        while s < 0xFFFFFFFC:
+            if s in seen:
+                raise ValueError("cycle in CFB FAT chain")
+            seen.add(s)
+            out.extend(get_sec(s))
+            s = fat[s]
+        return bytes(out)
+
+    dir_data = read_chain(dir_start)
+    minifat = []
+    if minifat_start < 0xFFFFFFFC:
+        mf = read_chain(minifat_start)
+        minifat = list(struct.unpack("<" + "I" * (len(mf) // 4), mf))
+
+    entries = []
+    for i in range(0, len(dir_data), 128):
+        chunk = dir_data[i:i + 128]
+        kind = chunk[66]
+        if kind == 0:
+            entries.append(None)
+            continue
+        nlen = struct.unpack_from("<H", chunk, 64)[0]
+        name = chunk[:max(0, nlen - 2)].decode("utf-16-le", "replace")
+        left, right, child = struct.unpack_from("<III", chunk, 68)
+        start, size = struct.unpack_from("<IQ", chunk, 116)
+        entries.append((name, kind, left, right, child, start, size))
+
+    root_mini = b""
+    root_child = NOSTREAM
+    for entry in entries:
+        if entry and entry[1] == 5:
+            root_child = entry[4]
+            if entry[5] < 0xFFFFFFFC and entry[6] > 0:
+                root_mini = read_chain(entry[5])[:entry[6]]
+            break
+
+    def read_mini(start, size):
+        out = bytearray()
+        s = start
+        seen = set()
+        while s < 0xFFFFFFFC and len(out) < size:
+            if s in seen:
+                raise ValueError("cycle in CFB MiniFAT chain")
+            seen.add(s)
+            out.extend(root_mini[s * mini_sz:(s + 1) * mini_sz])
+            s = minifat[s]
+        return bytes(out[:size])
+
+    streams = {}
+
+    def walk(idx, prefix):
+        if idx == NOSTREAM or idx >= len(entries) or entries[idx] is None:
+            return
+        name, kind, left, right, child, start, size = entries[idx]
+        walk(left, prefix)
+        path = (prefix + "/" + name) if prefix else name
+        if kind == 2:
+            if size == 0:
+                streams[path] = b""
+            elif size < mini_cutoff:
+                streams[path] = read_mini(start, size)
+            else:
+                streams[path] = read_chain(start)[:size]
+        elif kind == 1:
+            walk(child, path)
+        walk(right, prefix)
+
+    walk(root_child, "")
+    return streams
