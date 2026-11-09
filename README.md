@@ -60,12 +60,12 @@ Download just the file for your operating system directly from this repository. 
 
 **Windows**
 
-1. Download [**`ChatFormatter-Windows-Installer.bat`**](ChatFormatter-Windows-Installer.bat)
-2. **Double-click `ChatFormatter-Windows-Installer.bat`** (if SmartScreen prompts, click *More info → Run anyway*)
+1. Download [**`ChatFormatter-Windows-Installer.bat`**](https://github.com/javadhamed/chat-formatter-word/releases/latest/download/ChatFormatter-Windows-Installer.bat) *(direct file download; or grab it from [Releases](../../releases))*
+2. **Double-click `ChatFormatter-Windows-Installer.bat`** normally (do **not** use *Run as administrator*, or it may install under a different Windows user profile; if SmartScreen prompts, click *More info → Run anyway*)
 
 **macOS**
 
-1. Download [**`ChatFormatter-Mac-Installer.command`**](ChatFormatter-Mac-Installer.command)
+1. Download [**`ChatFormatter-Mac-Installer.command`**](https://github.com/javadhamed/chat-formatter-word/releases/latest/download/ChatFormatter-Mac-Installer.command) *(direct file download; or grab it from [Releases](../../releases))*
 2. **Double-click `ChatFormatter-Mac-Installer.command`**
    - If macOS says it lacks execute permission after downloading via a browser, run `chmod +x ~/Downloads/ChatFormatter-Mac-Installer.command` once in Terminal, or run `bash ~/Downloads/ChatFormatter-Mac-Installer.command`
    - If Gatekeeper asks, right-click the file and choose **Open**
@@ -233,12 +233,12 @@ MIT. See `LICENSE`.
 
 **ویندوز**
 
-۱. فایل [**`ChatFormatter-Windows-Installer.bat`**](ChatFormatter-Windows-Installer.bat) را دانلود کنید
-۲. **روی `ChatFormatter-Windows-Installer.bat` دابل‌کلیک کنید** (در صورت نمایش پیام SmartScreen، روی *More info → Run anyway* بزنید)
+۱. فایل [**`ChatFormatter-Windows-Installer.bat`**](https://github.com/javadhamed/chat-formatter-word/releases/latest/download/ChatFormatter-Windows-Installer.bat) را دانلود کنید *(دانلود مستقیم فایل؛ یا از صفحه [Releases](../../releases))*
+۲. **روی `ChatFormatter-Windows-Installer.bat` به‌صورت عادی دابل‌کلیک کنید** (*Run as administrator* را نزنید تا در پروفایل کاربر دیگری نصب نشود؛ در صورت نمایش پیام SmartScreen، روی *More info → Run anyway* بزنید)
 
 **مک**
 
-۱. فایل [**`ChatFormatter-Mac-Installer.command`**](ChatFormatter-Mac-Installer.command) را دانلود کنید
+۱. فایل [**`ChatFormatter-Mac-Installer.command`**](https://github.com/javadhamed/chat-formatter-word/releases/latest/download/ChatFormatter-Mac-Installer.command) را دانلود کنید *(دانلود مستقیم فایل؛ یا از صفحه [Releases](../../releases))*
 ۲. **روی `ChatFormatter-Mac-Installer.command` دابل‌کلیک کنید**
    - اگر مرورگر پس از دانلود اجازهٔ اجرا (`+x`) نداده بود، یک بار در Terminal دستور `chmod +x ~/Downloads/ChatFormatter-Mac-Installer.command` یا `bash ~/Downloads/ChatFormatter-Mac-Installer.command` را اجرا کنید
    - اگر پیام امنیتی macOS نمایش داده شد، روی فایل راست‌کلیک کرده و **Open** را بزنید

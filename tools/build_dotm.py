@@ -49,10 +49,10 @@ MODULES = {
     "ThisDocument": "ThisDocument.cls",
 }
 
-# MS-OVBA 2.3.4.1 uncompiled _VBA_PROJECT header (Version = 0xFFFF, no
-# PerformanceCache). Forces Word on every platform to compile from source
-# rather than executing stale p-code carried over from seed.dotm.
-UNCOMPILED_VBA_PROJECT = b"\xcc\x61\xff\xff\x00\xff\xff"
+# MS-OVBA 2.3.4.1 uncompiled _VBA_PROJECT stream (Reserved1=0x61CC,
+# Version=0xFFFF, Reserved2=0x00, no PerformanceCache). Forces Word on every
+# platform to compile cleanly from source rather than executing stale p-code.
+UNCOMPILED_VBA_PROJECT = b"\xcc\x61\xff\xff\x00"
 
 
 def _read_seed_streams(vba_bin):

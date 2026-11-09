@@ -10,50 +10,87 @@ the ones Word itself produced.
 import struct
 
 # ---------------------------------------------------------------------------
-# MS-OVBA compression (2.4.1).  Only literal tokens are emitted: every group of
-# up to 8 source bytes becomes a 0x00 flag byte followed by those bytes.  That
-# is valid per spec and keeps the writer simple.
+# MS-OVBA compression (2.4.1.3.1).
 #
-# Chunk sizing is deliberately conservative.  A literal-only chunk encodes n
-# source bytes as n + ceil(n/8) body bytes, and the 12-bit CompressedChunkSize
-# field tops out at 4095.  Packing to the theoretical maximum (3640 source
-# bytes -> 4095 body bytes) produces a container that oletools decodes
-# perfectly but that Word itself rejects: the template loads as an add-in and
-# then exposes no macros at all.
-#
-# That was found by bisecting the builder against a real Word 16.89 install -
-# source chunks of 2048, 1024 and 512 bytes are accepted, 3640 is not.  The
-# writer therefore stays at 1024, far away from the boundary, since a literal
-# encoding is ~12% larger than the source anyway and there is nothing to gain
-# from packing tightly.
+# Per MS-OVBA 2.4.1.1.4, every CompressedChunk (except the last) MUST cover
+# 4096 uncompressed source bytes.  Each chunk uses LZ77 CopyTokens per
+# 2.4.1.3.19, falling back to an uncompressed raw chunk (CompressedChunkFlag=0)
+# only if an incompressible 4096-byte block expands past 4094 body bytes.
 # ---------------------------------------------------------------------------
 
-_LITERALS_PER_GROUP = 8
-_MAX_SOURCE_PER_CHUNK = 1024
-_MAX_BODY_PER_CHUNK = _MAX_SOURCE_PER_CHUNK + (_MAX_SOURCE_PER_CHUNK // 8) + 1
+_CHUNK_SIZE = 4096
+_MAX_COMPRESSED_BODY = 4094  # header(2) + body <= 4096
+
+
+def _compress_chunk(chunk):
+    """Compress a single <=4096-byte chunk per MS-OVBA 2.4.1.3.1."""
+    n = len(chunk)
+    body = bytearray()
+    pos = 0
+    seen = {}  # 3-byte prefix -> list of offsets in chunk
+
+    def index_byte(idx):
+        if idx + 3 <= n:
+            seen.setdefault(chunk[idx:idx + 3], []).append(idx)
+
+    while pos < n:
+        flag_pos = len(body)
+        body.append(0x00)
+        flag_byte = 0
+        for bit in range(8):
+            if pos >= n:
+                break
+            best_len = 0
+            best_off = 0
+            if pos > 0 and pos + 3 <= n:
+                bit_count = max(4, (pos - 1).bit_length())
+                max_len = min((0xFFFF >> bit_count) + 3, n - pos)
+                max_off = min(1 << bit_count, pos)
+                min_cand = pos - max_off
+                cands = seen.get(chunk[pos:pos + 3])
+                if cands:
+                    for cand in reversed(cands):
+                        if cand < min_cand:
+                            break
+                        if cand >= pos:
+                            continue
+                        mlen = 3
+                        while mlen < max_len and chunk[cand + mlen] == chunk[pos + mlen]:
+                            mlen += 1
+                        if mlen > best_len:
+                            best_len = mlen
+                            best_off = pos - cand
+                            if best_len == max_len:
+                                break
+            if best_len >= 3:
+                bit_count = max(4, (pos - 1).bit_length())
+                token = ((best_off - 1) << (16 - bit_count)) | (best_len - 3)
+                flag_byte |= (1 << bit)
+                body.extend(struct.pack("<H", token))
+                for k in range(best_len):
+                    index_byte(pos + k)
+                pos += best_len
+            else:
+                body.append(chunk[pos])
+                index_byte(pos)
+                pos += 1
+            if len(body) > _MAX_COMPRESSED_BODY:
+                if n == _CHUNK_SIZE:
+                    return struct.pack("<H", 0x3FFF) + chunk
+                raise ValueError("Final MS-OVBA chunk body exceeded 4094 bytes")
+        body[flag_pos] = flag_byte
+
+    header = 0x8000 | 0x3000 | ((len(body) - 1) & 0x0FFF)
+    return struct.pack("<H", header) + bytes(body)
 
 
 def compress(data):
-    """Wrap source bytes in an MS-OVBA container."""
+    """Wrap source bytes in an MS-OVBA container (4096-byte chunks)."""
     out = bytearray(b"\x01")
     if not data:
         return bytes(out)
-    pos = 0
-    while pos < len(data):
-        take = min(_MAX_SOURCE_PER_CHUNK, len(data) - pos)
-        body = bytearray()
-        group = 0
-        while group < take:
-            body.append(0x00)
-            body.extend(data[pos + group:pos + group + _LITERALS_PER_GROUP])
-            group += _LITERALS_PER_GROUP
-        # CompressedChunkSize = len(body) + 2 (header), stored minus 3.
-        assert len(body) <= _MAX_BODY_PER_CHUNK, "chunk body too large"
-        assert (len(body) - 1) <= 0x0FFF, "CompressedChunkSize would overflow"
-        header = 0x8000 | 0x3000 | ((len(body) - 1) & 0x0FFF)
-        out.extend(struct.pack("<H", header))
-        out.extend(body)
-        pos += take
+    for pos in range(0, len(data), _CHUNK_SIZE):
+        out.extend(_compress_chunk(data[pos:pos + _CHUNK_SIZE]))
     return bytes(out)
 
 
