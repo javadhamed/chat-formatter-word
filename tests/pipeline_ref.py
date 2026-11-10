@@ -45,7 +45,7 @@ INLINE_CODE = re.compile(r"`([^`]+)`")
 LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 ITALIC = re.compile(r"(?<!\*)\*([^*]+)\*(?!\*)")
 
-UNICODE_DASHES = "\u2013\u2014\u2015\u2500"
+UNICODE_DASHES = "\u2012\u2013\u2014\u2015\u2500"
 SENTENCE_PUNCT = set(".?!:;)]\"'\u061f\u061b\u060c\u00bb\u2014\u2013")
 
 
@@ -71,7 +71,7 @@ def parse_digits(s):
 
 
 def normalize_dashes(s):
-    if len(s) < 2:
+    if not s:
         return s
     out = []
     i = 0
@@ -98,15 +98,15 @@ def normalize_dashes(s):
                 if s[j] in UNICODE_DASHES:
                     has_uni = True
                 j += 1
-            if j - i >= 2:
+            if has_uni:
+                out.append("-")
+            elif j - i >= 2:
                 prev_ch = s[i - 1] if i > 0 else ""
                 next_ch = s[j] if j < n else ""
-                if has_uni:
-                    out.append("\u2014")
-                elif prev_ch == " " and next_ch == " ":
-                    out.append("\u2014")
+                if prev_ch == " " and next_ch == " ":
+                    out.append("-")
                 elif prev_ch and next_ch and prev_ch not in " \t" and next_ch not in " \t":
-                    out.append("\u2014")
+                    out.append("-")
                 else:
                     out.append(s[i:j])
             else:

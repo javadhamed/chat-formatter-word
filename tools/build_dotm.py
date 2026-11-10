@@ -145,6 +145,13 @@ def build(output):
     tree["VBA"] = vba
     payload["word/vbaProject.bin"] = vbabuild.write_cfb(tree)
 
+    if "word/vbaData.xml" in payload:
+        payload["word/vbaData.xml"] = re.sub(
+            rb"<wne:mcd\b[^>]*TOGGLEAUTOFORMAT[^>]*/>",
+            b"",
+            payload["word/vbaData.xml"],
+        )
+
     os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zout:
         for n in names:

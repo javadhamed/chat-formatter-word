@@ -164,7 +164,6 @@ if "%REG_OK%"=="1" (
 
 if not exist "%CFHOME%\\.chatformatter" mkdir "%CFHOME%\\.chatformatter" 2>nul
 (
-    echo AutoFormat = 1
     echo Tables = 1
 ) > "%CFHOME%\\.chatformatter\\settings.ini"
 if exist "%CFHOME%\\.chatformatter\\settings.ini" (
@@ -181,9 +180,10 @@ echo.
 echo   How to use:
 echo     1. Open Word
 echo     2. Copy text from an AI chat ^(ChatGPT, DeepSeek, Gemini, ...^)
-echo     3. Paste into Word, select it, and RIGHT-CLICK
+echo     3. Paste it into Word
+echo     4. Open the Add-ins tab and click "Format Chat Text"
 echo.
-echo   Manual macros ^(Alt+F8^): FormatChatText, ToggleAutoFormat, ShowSettings
+echo   Other macros ^(Alt+F8^): FormatSelection, ShowSettings
 echo.
 goto :Cleanup
 
@@ -476,7 +476,7 @@ say "      OK -> $STARTUP/$TEMPLATE"
 # --- 5. Write fresh default settings ---------------------------
 say "[5/5] Writing default settings..."
 mkdir -p "$SETTINGS_DIR" || die "Could not create $SETTINGS_DIR"
-printf 'AutoFormat = 1\\nTables = 1\\n' > "$SETTINGS" || die "Could not write $SETTINGS"
+printf 'Tables = 1\\n' > "$SETTINGS" || die "Could not write $SETTINGS"
 say "      Created $SETTINGS"
 
 say ""
@@ -493,9 +493,9 @@ say ""
 say "  How to use:"
 say "    1. Copy an answer from ChatGPT, DeepSeek, Gemini, ..."
 say "    2. Paste it into Word"
-say "    3. Select the pasted text and RIGHT-CLICK"
+say "    3. Run from the Add-ins toolbar (Format Chat Text) or Tools > Macro > FormatChatText"
 say ""
-say "  Manual macros (Tools > Macro): FormatChatText, ToggleAutoFormat, ShowSettings"
+say "  Other macros (Tools > Macro): FormatSelection, ShowSettings"
 
 pause_exit 0
 

@@ -13,21 +13,12 @@ Attribute VB_Customizable = True
 Option Explicit
 
 '=======================================================================
-'  Chat Formatter - document & application level event handlers
+'  Chat Formatter - startup initialization
 '
-'  These run automatically because the template lives in Word's STARTUP
-'  folder and is loaded as a global add-in. No button press needed.
+'  Runs automatically because the template lives in Word's STARTUP
+'  folder and is loaded as a global add-in, adding the "Format Chat
+'  Text" button on the Add-ins tab.
 '=======================================================================
-
-Private WithEvents mApp As Word.Application
-
-
-Public Sub HookApplication()
-    If mApp Is Nothing Then
-        Set mApp = Application
-    End If
-End Sub
-
 
 Private Sub Document_Open()
     On Error Resume Next
@@ -39,16 +30,5 @@ End Sub
 Private Sub Document_New()
     On Error Resume Next
     ChatFormatter.AutoExec
-    On Error GoTo 0
-End Sub
-
-
-' Right-click anywhere in Word: if the current selection looks like
-' text copied from an AI chat, format it in place.
-Private Sub mApp_WindowBeforeRightClick(ByVal Sel As Selection, Cancel As Boolean)
-    On Error Resume Next
-    If Not Sel Is Nothing Then
-        ChatFormatter.CF_RightClickHandler Sel.Range
-    End If
     On Error GoTo 0
 End Sub

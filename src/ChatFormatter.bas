@@ -9,14 +9,9 @@ Option Explicit
 '  lists and real Word tables (Markdown pipe tables and TSV).
 '
 '  Entry points
-'    FormatChatText            format the whole active document
+'    FormatChatText            format the whole active document (Add-ins tab)
 '    FormatSelection           format only the current selection
-'    CF_SilentFormat           format the selection without any dialog
-'    ToggleAutoFormat          enable/disable right-click auto format
 '    ShowSettings              show current configuration
-'
-'  Automatic mode: when enabled, right-clicking a selection that came
-'  from an AI chat formats it immediately.  Disable with ToggleAutoFormat.
 '
 '  Design notes
 '    The document is read once into a snapshot of paragraph offsets and
@@ -89,7 +84,6 @@ Public Sub FormatChatText()
     Dim doc As Document
     Dim resp As VbMsgBoxResult
 
-    EnsureAppHook
     If Documents.Count = 0 Then
         Notify "No document is open."
         Exit Sub
@@ -110,7 +104,6 @@ Public Sub FormatSelection()
     Dim doc As Document
     Dim rng As Range
 
-    EnsureAppHook
     If Documents.Count = 0 Then
         Notify "No document is open."
         Exit Sub
@@ -126,7 +119,6 @@ Public Sub FormatSelection()
 End Sub
 
 
-' Used by the right-click hook: never interrupts with a dialog.
 Public Sub CF_SilentFormat()
     Dim doc As Document
     Dim rng As Range
@@ -144,30 +136,14 @@ Done:
 End Sub
 
 
-Public Sub ToggleAutoFormat()
-    EnsureAppHook
-    If GetSetting("AutoFormat", "1") = "1" Then
-        SetSetting "AutoFormat", "0"
-        Notify "Auto-format mode disabled." & vbCrLf & _
-               "Re-enable it from the macro list (Alt+F8, or Tools > Macro on Mac)."
-    Else
-        SetSetting "AutoFormat", "1"
-        Notify "Auto-format mode enabled." & vbCrLf & _
-               "Select AI text in Word and right-click to format it automatically."
-    End If
-End Sub
-
-
 Public Sub ShowSettings()
-    Dim autoFmt As String, tables As String
+    Dim tables As String
 
-    EnsureAppHook
-    If GetSetting("AutoFormat", "1") = "1" Then autoFmt = "Enabled" Else autoFmt = "Disabled"
     If GetSetting("Tables", "1") = "1" Then tables = "Enabled" Else tables = "Disabled"
 
     Notify "Chat Formatter " & CF_VERSION & vbCrLf & vbCrLf & _
-           "Auto-format (right-click): " & autoFmt & vbCrLf & _
-           "Table conversion: " & tables & vbCrLf & vbCrLf & _
+           "Run via: Add-ins tab -> Format Chat Text (or Alt+F8)" & vbCrLf & _
+           "Table conversion (FormatSelection): " & tables & vbCrLf & vbCrLf & _
            "Settings file: " & SettingsFile()
 End Sub
 
@@ -175,7 +151,6 @@ End Sub
 Public Sub AutoExec()
     On Error Resume Next
     EnsureBullet
-    EnsureAppHook
     CreateToolbarButton False
     On Error GoTo 0
 End Sub
@@ -189,16 +164,7 @@ End Sub
 Public Sub AutoSetup()
     On Error Resume Next
     EnsureBullet
-    EnsureAppHook
     CreateToolbarButton True
-    On Error GoTo 0
-End Sub
-
-
-Private Sub EnsureAppHook()
-    On Error Resume Next
-    ThisDocument.HookApplication
-    Err.Clear
     On Error GoTo 0
 End Sub
 
@@ -224,69 +190,6 @@ Done:
 End Sub
 
 
-'=======================================================================
-'  Event glue - called from ThisDocument
-'=======================================================================
-
-Public Sub CF_RightClickHandler(ByVal Target As Range)
-    Dim su As Boolean
-    If mBusy Then Exit Sub
-    If GetSetting("AutoFormat", "1") <> "1" Then Exit Sub
-    If Documents.Count = 0 Then Exit Sub
-    If Target Is Nothing Then Exit Sub
-    If Target.Start = Target.End Then Exit Sub
-
-    ' Cheap heuristic so ordinary prose is left alone.
-    If Not LooksLikeAIChat(Target.Text) Then Exit Sub
-
-    On Error GoTo CleanExit
-    su = Application.ScreenUpdating
-    Application.ScreenUpdating = False
-    CF_SilentFormat
-CleanExit:
-    On Error Resume Next
-    Application.ScreenUpdating = su
-    Err.Clear
-    On Error GoTo 0
-End Sub
-
-
-Private Function LooksLikeAIChat(ByVal s As String) As Boolean
-    Dim lines() As String
-    Dim i As Long
-    Dim ln As String
-    Dim dummyNum As Long
-    Dim norm As String
-
-    If Len(s) < 3 Then Exit Function
-    If InStr(s, "**") > 0 Then LooksLikeAIChat = True: Exit Function
-    If InStr(s, "~~") > 0 Then LooksLikeAIChat = True: Exit Function
-    If InStr(s, "`") > 0 Then LooksLikeAIChat = True: Exit Function
-    If InStr(s, "##") > 0 Then LooksLikeAIChat = True: Exit Function
-    If InStr(s, "[") > 0 And InStr(s, "](") > 0 Then LooksLikeAIChat = True: Exit Function
-    If HasDashRunHint(s) Then LooksLikeAIChat = True: Exit Function
-
-    norm = Replace(Replace(Replace(s, vbCrLf, vbCr), vbLf, vbCr), Chr$(11), vbCr)
-    If CountChar(norm, "|") >= 2 And InStr(norm, vbCr) > 0 Then LooksLikeAIChat = True: Exit Function
-    If CountChar(norm, vbTab) >= 1 And InStr(norm, vbCr) > 0 Then LooksLikeAIChat = True: Exit Function
-
-    lines = Split(norm, vbCr)
-    For i = LBound(lines) To UBound(lines)
-        ln = CleanParaText(lines(i))
-        If Len(ln) > 0 Then
-            If AtxLevel(ln) > 0 Then LooksLikeAIChat = True: Exit Function
-            If IsBulletStart(ln) Then LooksLikeAIChat = True: Exit Function
-            If IsNumberedStart(ln, dummyNum) Then LooksLikeAIChat = True: Exit Function
-            If HasSequentialNumbered(ln) Then LooksLikeAIChat = True: Exit Function
-            If Left$(ln, 2) = "> " Then LooksLikeAIChat = True: Exit Function
-            If InStr(norm, vbCr) > 0 Then
-                If IsHorizontalRule(ln) Or IsSetextLine(ln) Then LooksLikeAIChat = True: Exit Function
-            End If
-        End If
-    Next i
-End Function
-
-
 Private Function CurrentRange(ByVal doc As Document) As Range
     Dim r As Range
 
@@ -310,8 +213,8 @@ End Function
 '
 '  The formatter runs on the UI thread, so Beat hands control back to the
 '  host every few dozen paragraph visits and shows progress on the status
-'  bar.  mBusy is the re-entrancy guard for the right-click hook; it must
-'  NOT gate Beat itself, or nothing would ever repaint.
+'  bar.  mBusy guards against re-entrant execution while Beat yields; it
+'  must NOT gate Beat itself, or nothing would ever repaint.
 '=======================================================================
 
 Private Sub BeginRun(ByVal totalSteps As Long)
@@ -1746,43 +1649,28 @@ Private Function IsUnicodeDashChar(ByVal ch As String) As Boolean
     If Len(ch) <> 1 Then Exit Function
     code = AscW(ch)
     If code < 0 Then code = code + 65536
-    If code = &H2013 Or code = &H2014 Or code = &H2015 Or code = &H2500 Then
+    If code = &H2012 Or code = &H2013 Or code = &H2014 Or _
+       code = &H2015 Or code = &H2500 Then
         IsUnicodeDashChar = True
     End If
 End Function
 
 
-Private Function HasDashRunHint(ByVal s As String) As Boolean
-    Dim em As String, en As String, bar As String, box As String
-    em = ChrW$(&H2014)
-    en = ChrW$(&H2013)
-    bar = ChrW$(&H2015)
-    box = ChrW$(&H2500)
-    If InStr(s, em & em) > 0 Or InStr(s, en & en) > 0 Or _
-       InStr(s, bar & bar) > 0 Or InStr(s, box & box) > 0 Or _
-       InStr(s, em & en) > 0 Or InStr(s, en & em) > 0 Or _
-       InStr(s, " -- ") > 0 Or InStr(s, " --- ") > 0 Then
-        HasDashRunHint = True
-    End If
-End Function
-
-
-' Collapses repeated dashes (e.g., "——", "––", " -- ") outside inline code
-' spans and link URLs to a single standard em-dash ("—").
+' Normalizes Unicode dashes ("—", "–", "――", "──") and repeated prose
+' hyphens ("——", " -- ", "word--word") outside inline code spans and link
+' URLs to a single standard ASCII hyphen ("-").
 Private Function NormalizeDashes(ByVal s As String) As String
     Dim nLen As Long, i As Long, j As Long
     Dim closeTick As Long, closeParen As Long
     Dim ch As String, prevCh As String, nextCh As String
-    Dim em As String
     Dim hasUnicode As Boolean
     Dim outBuf As String
 
-    If Len(s) < 2 Then
+    If Len(s) = 0 Then
         NormalizeDashes = s
         Exit Function
     End If
 
-    em = ChrW$(&H2014)
     nLen = Len(s)
     i = 1
     Do While i <= nLen
@@ -1819,19 +1707,19 @@ Private Function NormalizeDashes(ByVal s As String) As String
                     Exit Do
                 End If
             Loop
-            If j - i >= 2 Then
+            If hasUnicode Then
+                outBuf = outBuf & "-"
+            ElseIf j - i >= 2 Then
                 prevCh = ""
                 If i > 1 Then prevCh = Mid$(s, i - 1, 1)
                 nextCh = ""
                 If j <= nLen Then nextCh = Mid$(s, j, 1)
-                If hasUnicode Then
-                    outBuf = outBuf & em
-                ElseIf prevCh = " " And nextCh = " " Then
-                    outBuf = outBuf & em
+                If prevCh = " " And nextCh = " " Then
+                    outBuf = outBuf & "-"
                 ElseIf Len(prevCh) > 0 And Len(nextCh) > 0 And _
                        prevCh <> " " And prevCh <> vbTab And _
                        nextCh <> " " And nextCh <> vbTab Then
-                    outBuf = outBuf & em
+                    outBuf = outBuf & "-"
                 Else
                     outBuf = outBuf & Mid$(s, i, j - i)
                 End If
@@ -1849,22 +1737,21 @@ End Function
 
 
 Private Sub CollapseDashesInRange(ByVal r As Range)
-    Dim em As String, en As String, bar As String, box As String
+    Dim em As String
     em = ChrW$(&H2014)
-    en = ChrW$(&H2013)
-    bar = ChrW$(&H2015)
-    box = ChrW$(&H2500)
+
+    ReplaceAllInRange r, ChrW$(&H2012), em
+    ReplaceAllInRange r, ChrW$(&H2013), em
+    ReplaceAllInRange r, ChrW$(&H2015), em
+    ReplaceAllInRange r, ChrW$(&H2500), em
 
     ReplaceAllInRange r, em & em, em
-    ReplaceAllInRange r, en & en, em
-    ReplaceAllInRange r, bar & bar, em
-    ReplaceAllInRange r, box & box, em
-    ReplaceAllInRange r, em & en, em
-    ReplaceAllInRange r, en & em, em
     ReplaceAllInRange r, em & "-", em
     ReplaceAllInRange r, "-" & em, em
-    ReplaceAllInRange r, " --- ", " " & em & " "
-    ReplaceAllInRange r, " -- ", " " & em & " "
+    ReplaceAllInRange r, em, "-"
+
+    ReplaceAllInRange r, " --- ", " - "
+    ReplaceAllInRange r, " -- ", " - "
 End Sub
 
 

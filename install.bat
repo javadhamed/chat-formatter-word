@@ -122,7 +122,6 @@ if "%REG_OK%"=="1" (
 
 if not exist "%CFHOME%\.chatformatter" mkdir "%CFHOME%\.chatformatter" 2>nul
 (
-    echo AutoFormat = 1
     echo Tables = 1
 ) > "%CFHOME%\.chatformatter\settings.ini"
 if exist "%CFHOME%\.chatformatter\settings.ini" (
@@ -140,10 +139,9 @@ echo   How to use:
 echo     1. Open Word
 echo     2. Copy text from an AI chat ^(ChatGPT, DeepSeek, ...^)
 echo     3. Paste it into Word
-echo     4. Select the pasted text and RIGHT-CLICK
+echo     4. Open the Add-ins tab and click "Format Chat Text"
 echo.
-echo   Prefer an explicit button? Alt+F8 -^> FormatChatText
-echo   Turn the automatic mode off? Alt+F8 -^> ToggleAutoFormat
+echo   Other macros ^(Alt+F8^): FormatSelection, ShowSettings
 echo.
 goto :Cleanup
 
