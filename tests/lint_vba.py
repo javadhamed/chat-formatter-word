@@ -202,7 +202,7 @@ class Module:
             part = re.sub(r"^(?:optional\s+|paramarray\s+)", "", part)
             part = re.sub(r"^(?:byval\s+|byref\s+|withevents\s+)", "", part)
             head = part.split(" as ")[0].strip()
-            head = head.strip()
+            head = re.sub(r"\(\s*\)$", "", head.strip())
             if re.match(r"^\w+$", head):
                 out.append(head)
         return out

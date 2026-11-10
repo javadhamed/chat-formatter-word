@@ -28,8 +28,9 @@ import re
 
 CODE_FENCE = "```"
 TSV_LANGS = {"tsv", "tab", "tabs", "table"}
+DIGIT_RE = r"[0-9\u06f0-\u06f9\u0660-\u0669]"
 ATX = re.compile(r"^(#{1,5}) (.+)$")
-NUMBERED = re.compile(r"^(\d{1,3})\. (.+)$")
+NUMBERED = re.compile(rf"^({DIGIT_RE}{{1,3}})\. (.+)$")
 BULLET = re.compile(r"^([-*+]) (.+)$")
 QUOTE_LINE = re.compile(r"^> ?(.*)$")
 SETEXT_EQ = re.compile(r"^={2,}$")
@@ -43,6 +44,164 @@ STRIKE = re.compile(r"~~(.+?)~~")
 INLINE_CODE = re.compile(r"`([^`]+)`")
 LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 ITALIC = re.compile(r"(?<!\*)\*([^*]+)\*(?!\*)")
+
+UNICODE_DASHES = "\u2013\u2014\u2015\u2500"
+SENTENCE_PUNCT = set(".?!:;)]\"'\u061f\u061b\u060c\u00bb\u2014\u2013")
+
+
+def digit_value(ch):
+    code = ord(ch)
+    if 48 <= code <= 57:
+        return code - 48
+    if 0x06F0 <= code <= 0x06F9:
+        return code - 0x06F0
+    if 0x0660 <= code <= 0x0669:
+        return code - 0x0660
+    return -1
+
+
+def parse_digits(s):
+    acc = 0
+    for ch in s:
+        d = digit_value(ch)
+        if d < 0:
+            return -1
+        acc = acc * 10 + d
+    return acc
+
+
+def normalize_dashes(s):
+    if len(s) < 2:
+        return s
+    out = []
+    i = 0
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if ch == "`":
+            close = s.find("`", i + 1)
+            if close != -1:
+                out.append(s[i:close + 1])
+                i = close + 1
+                continue
+        elif s[i:i + 2] == "](":
+            close = s.find(")", i + 2)
+            if close != -1:
+                out.append(s[i:close + 1])
+                i = close + 1
+                continue
+
+        if ch in UNICODE_DASHES or ch == "-":
+            has_uni = ch in UNICODE_DASHES
+            j = i + 1
+            while j < n and (s[j] in UNICODE_DASHES or s[j] == "-"):
+                if s[j] in UNICODE_DASHES:
+                    has_uni = True
+                j += 1
+            if j - i >= 2:
+                prev_ch = s[i - 1] if i > 0 else ""
+                next_ch = s[j] if j < n else ""
+                if has_uni:
+                    out.append("\u2014")
+                elif prev_ch == " " and next_ch == " ":
+                    out.append("\u2014")
+                elif prev_ch and next_ch and prev_ch not in " \t" and next_ch not in " \t":
+                    out.append("\u2014")
+                else:
+                    out.append(s[i:j])
+            else:
+                out.append(ch)
+            i = j
+            continue
+
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def split_sequential_numbered(s):
+    n = len(s)
+    if n < 6 or ". " not in s:
+        return [s]
+
+    cands = []
+    i = 0
+    while i < n:
+        if s[i] == "`":
+            close = s.find("`", i + 1)
+            if close != -1:
+                i = close + 1
+                continue
+        elif s[i:i + 2] == "](":
+            close = s.find(")", i + 2)
+            if close != -1:
+                i = close + 1
+                continue
+
+        prev_ch = s[i - 1] if i > 0 else ""
+        if i == 0 or prev_ch in " \t":
+            dlen = 0
+            while i + dlen < n and dlen < 4 and digit_value(s[i + dlen]) >= 0:
+                dlen += 1
+            if 1 <= dlen <= 3 and i + dlen + 1 < n and s[i + dlen:i + dlen + 2] == ". ":
+                if s[i + dlen + 2:].strip():
+                    num_val = parse_digits(s[i:i + dlen])
+                    is_punct = False
+                    is_colon = False
+                    if i > 0:
+                        j = i - 1
+                        while j >= 0 and s[j] in " \t":
+                            j -= 1
+                        if j >= 0:
+                            is_colon = (s[j] == ":")
+                            is_punct = (s[j] in SENTENCE_PUNCT)
+                    cands.append((i, num_val, is_punct, is_colon))
+                    i += dlen + 2
+                    continue
+        i += 1
+
+    if len(cands) < 2:
+        return [s]
+
+    start_idx = -1
+    if cands[0][0] == 0 and 1 <= cands[0][1] <= 50:
+        start_idx = 0
+    else:
+        for idx, (_, num_val, _, is_colon) in enumerate(cands):
+            if num_val == 1 and is_colon:
+                start_idx = idx
+                break
+    if start_idx == -1:
+        return [s]
+
+    chain = [start_idx]
+    want = cands[start_idx][1] + 1
+    all_punct = True
+    for idx in range(start_idx + 1, len(cands)):
+        if cands[idx][1] == want:
+            chain.append(idx)
+            if not cands[idx][2]:
+                all_punct = False
+            want += 1
+
+    if len(chain) < 2:
+        return [s]
+    if len(chain) == 2 and (cands[chain[0]][1] != 1 or not all_punct):
+        return [s]
+
+    out = []
+    first_pos = cands[chain[0]][0]
+    if first_pos > 0:
+        intro = s[:first_pos].strip()
+        if intro:
+            out.append(intro)
+    for k, cidx in enumerate(chain):
+        seg_from = cands[cidx][0]
+        seg_to = cands[chain[k + 1]][0] if k + 1 < len(chain) else n
+        piece = s[seg_from:seg_to].strip()
+        if piece:
+            out.append(piece)
+    return out if len(out) > 1 else [s]
 
 
 def inline(text):
@@ -90,8 +249,21 @@ def scan(lines):
     plain_start = 0
 
     def flush(end):
-        if end > plain_start:
-            blocks.append(Block("plain", plain_start, end))
+        nonlocal plain_start
+        k = plain_start
+        seg_start = k
+        while k < end:
+            pipe_end = find_pipe_table_end(lines, k, end)
+            if pipe_end > k:
+                if k > seg_start:
+                    blocks.append(Block("plain", seg_start, k))
+                blocks.append(Block("table", k, pipe_end))
+                k = pipe_end
+                seg_start = k
+            else:
+                k += 1
+        if end > seg_start:
+            blocks.append(Block("plain", seg_start, end))
 
     while i < n:
         line = lines[i].strip()
@@ -136,16 +308,16 @@ def looks_like_tsv(rows):
 # A line this formatter already produced carries a list marker followed by a
 # tab.  It must not be re-read as a TSV data row on the next pass, otherwise
 # every bullet turns into a one-cell table on the second run.
-LIST_MARKED = re.compile(r"^\s*(?:[\u2022\-\*\+]\t|\d{1,3}\.\t)")
+LIST_MARKED = re.compile(rf"^\s*(?:[\u2022\-\*\+]\t|{DIGIT_RE}{{1,3}}\.\t)")
 
 
-def tabular_runs(rows):
-    """Split a fenced tsv body into (is_table, lines) runs.
+def tabular_runs(rows, min_rows=1):
+    """Split a body into (is_table, lines) runs.
 
-    Consecutive lines that contain at least one tab become one table run;
-    lines without tabs stay as ordinary paragraphs.
+    Consecutive lines that contain at least one tab become one table run
+    when the run has at least min_rows non-empty lines with >= 2 columns.
     """
-    runs = []
+    raw_runs = []
     cur, cur_tab = [], None
     for r in rows:
         has_tab = (r.count("\t") >= 1 and bool(r.strip())
@@ -154,10 +326,22 @@ def tabular_runs(rows):
             cur.append(r)
             cur_tab = has_tab
         else:
-            runs.append((cur_tab, cur))
+            raw_runs.append((cur_tab, cur))
             cur, cur_tab = [r], has_tab
     if cur:
-        runs.append((cur_tab, cur))
+        raw_runs.append((cur_tab, cur))
+
+    runs = []
+    for is_tab, run in raw_runs:
+        if is_tab:
+            non_empty = [x for x in run if x.strip() and not LIST_MARKED.match(x)]
+            max_cols = max((x.count("\t") + 1 for x in non_empty), default=0)
+            if len(non_empty) < min_rows or max_cols < 2:
+                is_tab = False
+        if runs and not is_tab and not runs[-1][0]:
+            runs[-1][1].extend(run)
+        else:
+            runs.append((is_tab, list(run)))
     return runs
 
 
@@ -166,36 +350,89 @@ def build_grid(rows):
     cols = max(r.count("\t") for r in rows) + 1
     grid = []
     for row in rows:
-        cells = [c.strip() for c in row.split("\t")]
+        cells = [inline(normalize_dashes(c.strip())) for c in row.split("\t")]
         cells += [""] * (cols - len(cells))
         grid.append(cells[:cols])
     return grid
 
 
+def pipe_col_count(s):
+    t = s.strip()
+    if len(t) < 2 or "|" not in t:
+        return 0
+    if t.startswith("|"):
+        t = t[1:]
+    if t.endswith("|"):
+        t = t[:-1]
+    if not t:
+        return 0
+    return t.count("|") + 1
+
+
 def is_pipe_row(s):
-    s = s.strip()
-    return len(s) >= 3 and s.startswith("|") and s.endswith("|") and s.count("|") >= 2
+    return "|" in s and pipe_col_count(s) >= 2
+
+
+def is_bordered_pipe_row(s):
+    t = s.strip()
+    return len(t) >= 3 and t.startswith("|") and t.endswith("|") and t.count("|") >= 2
 
 
 def is_separator(s):
-    s = s.strip()
-    if not s or "|" not in s:
+    t = s.strip()
+    if len(t) < 3 or "|" not in t or "-" not in t:
         return False
-    if "-" not in s:
+    if t.startswith("|"):
+        t = t[1:]
+    if t.endswith("|"):
+        t = t[:-1]
+    parts = t.split("|")
+    if len(parts) < 2:
         return False
-    return all(c in "|-: \t" for c in s)
+    for p in parts:
+        c = p.strip()
+        if not c or "-" not in c or not all(ch in "-:" for ch in c):
+            return False
+    return True
+
+
+def find_pipe_table_end(lines, idx, last):
+    s0 = lines[idx].strip()
+    if not is_pipe_row(s0):
+        return 0
+    if idx + 1 < last and is_separator(lines[idx + 1]):
+        j = idx + 2
+        while j < last:
+            sj = lines[j].strip()
+            if not sj or fence_info(sj) is not None or not is_pipe_row(sj) or is_separator(sj):
+                break
+            j += 1
+        return j
+    if is_bordered_pipe_row(s0) and not is_separator(s0):
+        j = idx + 1
+        while j < last:
+            sj = lines[j].strip()
+            if not sj or fence_info(sj) is not None:
+                break
+            if is_bordered_pipe_row(sj) and not is_separator(sj):
+                j += 1
+            else:
+                break
+        if j > idx + 1:
+            return j
+    return 0
 
 
 def pipe_grid(rows):
-    body = [r.strip() for r in rows[2:]]
+    data_rows = [r.strip() for r in rows if r.strip() and not is_separator(r)]
     cells = []
-    for row in [rows[0]] + body:
+    for row in data_rows:
         s = row.strip()
         if s.startswith("|"):
             s = s[1:]
         if s.endswith("|"):
             s = s[:-1]
-        cells.append([c.strip() for c in s.split("|")])
+        cells.append([inline(normalize_dashes(c.strip())) for c in s.split("|")])
     cols = max(len(r) for r in cells)
     for r in cells:
         r += [""] * (cols - len(r))
@@ -248,29 +485,41 @@ def process_plain_run(chunk):
 
         m = ATX.match(t)
         if m:
-            out.append(("h%d" % len(m.group(1)), inline(m.group(2))))
+            out.append(("h%d" % len(m.group(1)), inline(normalize_dashes(m.group(2)))))
             continue
         if len(t) >= 3 and is_hr(t):
             continue
         bq = QUOTE_LINE.match(t)
         if bq:
-            out.append(("q", inline(bq.group(1))))
+            out.append(("q", inline(normalize_dashes(bq.group(1)))))
             continue
         bu = BULLET.match(t)
         if bu:
-            out.append(("ul", "\u2022\t" + inline(bu.group(2))))
+            out.append(("ul", "\u2022\t" + inline(normalize_dashes(bu.group(2)))))
             continue
-        nu = NUMBERED.match(t)
-        if nu:
-            out.append(("ol", nu.group(1) + ".\t" + inline(nu.group(2))))
-            continue
-        out.append(("p", inline(t)))
+        pieces = split_sequential_numbered(t)
+        for piece in pieces:
+            nu = NUMBERED.match(piece)
+            if nu:
+                out.append(("ol", nu.group(1) + ".\t" + inline(normalize_dashes(nu.group(2)))))
+            else:
+                out.append(("p", inline(normalize_dashes(piece))))
 
     return out
 
 
+def expand_soft_breaks(lines):
+    out = []
+    for ln in lines:
+        if "\x0b" in ln:
+            out.extend(ln.split("\x0b"))
+        else:
+            out.append(ln)
+    return out
+
+
 def run(lines):
-    doc = Doc(lines)
+    doc = Doc(expand_soft_breaks(lines))
     blocks = scan(doc.lines)
     doc.touch()  # the scan itself is linear
 
@@ -280,14 +529,18 @@ def run(lines):
         chunk = doc.lines[b.start:b.end]
         if b.kind == "tsv":
             out = []
-            for is_tab, run in tabular_runs(chunk[1:-1]):
+            for is_tab, sub in tabular_runs(chunk[1:-1], min_rows=1):
                 if is_tab:
-                    grid = build_grid(run)
+                    grid = build_grid(sub)
                     out.append("\x00T%d\x00" % len(doc.tables))
                     doc.tables.append(grid)
                 else:
-                    out.extend(run)
+                    out.extend(sub)
             doc.replace_block(b.start, b.end, out)
+        elif b.kind == "table":
+            grid = pipe_grid(chunk)
+            doc.replace_block(b.start, b.end, ["\x00T%d\x00" % len(doc.tables)])
+            doc.tables.append(grid)
         elif b.kind == "code":
             # Drop the opening fence, and the closing fence only when there
             # actually was one - an unterminated fence keeps its last line.
@@ -297,13 +550,13 @@ def run(lines):
             # Tab runs become tables *before* list markers are inserted,
             # otherwise the tab in "1.\titem" looks like a table row.
             out = []
-            for is_tab, run in tabular_runs(chunk):
+            for is_tab, sub in tabular_runs(chunk, min_rows=2):
                 if is_tab:
-                    grid = build_grid(run)
+                    grid = build_grid(sub)
                     out.append("\x00T%d\x00" % len(doc.tables))
                     doc.tables.append(grid)
                 else:
-                    out.extend(t for _, t in process_plain_run(run))
+                    out.extend(t for _, t in process_plain_run(sub))
             doc.replace_block(b.start, b.end, out)
 
     return doc

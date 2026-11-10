@@ -160,6 +160,19 @@ def verify_dotm(path):
     assert "HKCU\\Software\\ChatFormatter\\" not in cf_text
     assert "IsSetextContinuation(" in cf_text
     assert 'If InStr(s, "`") > 0 Then LooksLikeAIChat = True' in cf_text
+    for required_symbol in (
+        "BK_PIPETABLE",
+        "ApplyPipeTable",
+        "SplitSequentialNumbered",
+        "NormalizeDashes",
+        "DigitValue",
+        "AppendParaSegments",
+        "Font.BoldBi = True",
+        "wdTableDirectionRtl",
+    ):
+        assert required_symbol in cf_text, f"missing {required_symbol} in VBA/ChatFormatter"
+    m_scan = re.search(r"mBusy\s*=\s*True.*?nBlocks\s*=\s*ScanBlocks\(", cf_text, re.S)
+    assert m_scan, "mBusy must be set before ScanBlocks so DoEvents cannot re-enter"
 
     assert td_text.startswith('Attribute VB_Name = "ThisDocument"\r\n')
     assert "VERSION 1.0 CLASS" not in td_text
