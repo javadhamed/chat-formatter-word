@@ -193,6 +193,104 @@ def t_crlf_like_trailing_space():
     return eq(fmt(["# H   ", "   "]), ["H", "   "], "trailing spaces trimmed")
 
 
+@case
+def t_pipe_table_persian_and_prose_guard():
+    src = [
+        "# سخت\u200cافزار نهایی",
+        "| مؤلفه | انتخاب | جزئیات |",
+        "| :--- | :--- | :--- |",
+        "| **STT** | `Whisper` | آموزش —— تست |",
+        "| LLM | DGX Spark | بخش\u200cهای متنی |",
+        "عیار عبور |",
+    ]
+    doc = P.run(src)
+    ok = eq(len(doc.tables), 1, "markdown pipe table converted to real Word table")
+    ok &= eq(
+        doc.tables[0],
+        [
+            ["مؤلفه", "انتخاب", "جزئیات"],
+            ["STT", "Whisper", "آموزش \u2014 تست"],
+            ["LLM", "DGX Spark", "بخش\u200cهای متنی"],
+        ],
+        "pipe table cells parsed, inline/dashes cleaned, separator dropped",
+    )
+    ok &= eq(doc.lines[-1], "عیار عبور |", "stray trailing pipe prose left alone")
+    return ok
+
+
+@case
+def t_double_dash_collapsed():
+    src = [
+        "# \U0001f4cb سند تحویل پروژه (Handoff) \u2014\u2014 جمع\u200cبندی نهایی",
+        "text -- more and `keep -- raw` and --flag and [link -- text](http://x.y/a--b)",
+        "پروژه--جمع\u200cبندی",
+        "```",
+        "code \u2014\u2014 untouched",
+        "```",
+    ]
+    want = [
+        "\U0001f4cb سند تحویل پروژه (Handoff) \u2014 جمع\u200cبندی نهایی",
+        "text \u2014 more and keep -- raw and --flag and link \u2014 text",
+        "پروژه\u2014جمع\u200cبندی",
+        "code \u2014\u2014 untouched",
+    ]
+    return eq(fmt(src), want, "double/em dashes collapsed outside code and URLs")
+
+
+@case
+def t_single_tab_line_not_table():
+    doc = P.run(["col1\tcol2"])
+    ok = eq(len(doc.tables), 0, "single unfenced tab row does not create 1-row table")
+    ok &= eq(doc.lines, ["col1\tcol2"], "single tab line kept as text")
+    return ok
+
+
+@case
+def t_persian_and_inline_sequential_numbered():
+    src = [
+        "۱. «دستیار حقوقی». ۲. ارجاع هوشمند. ۳. پروندهٔ دیجیتال.",
+        "مراحل: ۱. گام اول. ۲. گام دوم.",
+        "1. Read chapter 2. Today",
+    ]
+    want = [
+        "۱.\t«دستیار حقوقی».",
+        "۲.\tارجاع هوشمند.",
+        "۳.\tپروندهٔ دیجیتال.",
+        "مراحل:",
+        "۱.\tگام اول.",
+        "۲.\tگام دوم.",
+        "1.\tRead chapter 2. Today",
+    ]
+    once = fmt(src)
+    ok = eq(once, want, "Persian & sequential inline numbers split vertically")
+    ok &= eq(fmt(once), once, "Persian numbered lists are idempotent")
+    return ok
+
+
+@case
+def t_soft_breaks_and_heavy_doc():
+    soft = "# Title\x0b| A | B |\x0b| :--- | :--- |\x0b| 1 | 2 |\x0b۱. الف\x0b۲. ب"
+    doc = P.run([soft])
+    ok = eq(len(doc.tables), 1, "pipe table inside Shift+Enter paragraph becomes table")
+    ok &= eq(doc.tables[0], [["A", "B"], ["1", "2"]], "soft-broken table parsed")
+    ok &= eq(doc.lines[-2:], ["۱.\tالف", "۲.\tب"], "soft-broken Persian items formatted")
+
+    heavy = []
+    for i in range(250):
+        heavy.extend([
+            f"# Section {i} \u2014\u2014 Detail",
+            "۱. مورد اول. ۲. مورد دوم. ۳. مورد سوم.",
+            "| A | B |",
+            "| --- | --- |",
+            f"| r{i} | **v{i}** |",
+            "",
+        ])
+    heavy_doc = P.run(heavy)
+    ok &= eq(len(heavy_doc.tables), 250, "heavy document converts all 250 pipe tables")
+    ok &= eq(heavy_doc.ops <= 6 * len(heavy), True, "heavy document stays linear")
+    return ok
+
+
 def main():
     failed = 0
     for fn in CASES:

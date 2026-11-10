@@ -43,6 +43,7 @@ Private Const BK_PLAIN As Long = 0      ' ordinary text, no tabs
 Private Const BK_CODE As Long = 1       ' fenced block
 Private Const BK_TSV As Long = 2        ' fenced block tagged tsv/tab/table
 Private Const BK_TABRUN As Long = 3     ' unfenced run of tab separated rows
+Private Const BK_PIPETABLE As Long = 4  ' markdown pipe table (| a | b |)
 
 ' Per-line roles produced by the plain-block pass
 Private Const LK_TEXT As Long = 0
@@ -263,8 +264,9 @@ Private Function LooksLikeAIChat(ByVal s As String) As Boolean
     If InStr(s, "`") > 0 Then LooksLikeAIChat = True: Exit Function
     If InStr(s, "##") > 0 Then LooksLikeAIChat = True: Exit Function
     If InStr(s, "[") > 0 And InStr(s, "](") > 0 Then LooksLikeAIChat = True: Exit Function
+    If HasDashRunHint(s) Then LooksLikeAIChat = True: Exit Function
 
-    norm = Replace(Replace(s, vbCrLf, vbCr), vbLf, vbCr)
+    norm = Replace(Replace(Replace(s, vbCrLf, vbCr), vbLf, vbCr), Chr$(11), vbCr)
     If CountChar(norm, "|") >= 2 And InStr(norm, vbCr) > 0 Then LooksLikeAIChat = True: Exit Function
     If CountChar(norm, vbTab) >= 1 And InStr(norm, vbCr) > 0 Then LooksLikeAIChat = True: Exit Function
 
@@ -275,6 +277,7 @@ Private Function LooksLikeAIChat(ByVal s As String) As Boolean
             If AtxLevel(ln) > 0 Then LooksLikeAIChat = True: Exit Function
             If IsBulletStart(ln) Then LooksLikeAIChat = True: Exit Function
             If IsNumberedStart(ln, dummyNum) Then LooksLikeAIChat = True: Exit Function
+            If HasSequentialNumbered(ln) Then LooksLikeAIChat = True: Exit Function
             If Left$(ln, 2) = "> " Then LooksLikeAIChat = True: Exit Function
             If InStr(norm, vbCr) > 0 Then
                 If IsHorizontalRule(ln) Or IsSetextLine(ln) Then LooksLikeAIChat = True: Exit Function
@@ -380,10 +383,14 @@ Private Sub RunPipeline(ByVal doc As Document, ByVal rng As Range, _
     If rng Is Nothing Then Exit Sub
 
     EnsureBullet
+    mBusy = True
+    su = Application.ScreenUpdating
+    On Error GoTo CleanUp
 
     ' One linear pass fills the snapshot and classifies the blocks.
     nBlocks = ScanBlocks(rng, pStart, pEnd, pText, blks)
     If nBlocks = 0 Then
+        EndRun
         If notifyUser Then Notify "There is nothing here to format."
         Exit Sub
     End If
@@ -391,7 +398,6 @@ Private Sub RunPipeline(ByVal doc As Document, ByVal rng As Range, _
 
     BeginRun nBlocks + 2
 
-    su = Application.ScreenUpdating
     On Error Resume Next
     pagin = Application.Options.Pagination
     hasPagin = (Err.Number = 0): Err.Clear
@@ -423,7 +429,7 @@ Private Sub RunPipeline(ByVal doc As Document, ByVal rng As Range, _
     For i = nBlocks To 1 Step -1
         lo = pStart(blks(i).First)
         hi = ClampEnd(doc, pEnd(blks(i).Last))
-        Beat "formatting"
+        StepDone "formatting"
         If hi > lo Then
             Select Case blks(i).Kind
                 Case BK_CODE
@@ -432,6 +438,8 @@ Private Sub RunPipeline(ByVal doc As Document, ByVal rng As Range, _
                     ApplyFenceWithBody doc, lo, hi, blks(i), pText, doTables
                 Case BK_TABRUN
                     ApplyTabRun doc, lo, hi, blks(i), pText, doTables
+                Case BK_PIPETABLE
+                    ApplyPipeTable doc, lo, hi, blks(i), pText, doTables
                 Case Else
                     ApplyPlainBlock doc, lo, hi, blks(i), pText
             End Select
@@ -525,15 +533,8 @@ Private Function ScanBlocks(ByVal rng As Range, _
     n = 0
     For Each p In rng.Paragraphs
         If Not p.Range.Information(wdWithInTable) Then
-            n = n + 1
-            If n > UBound(pStart) Then
-                ReDim Preserve pStart(1 To n * 2)
-                ReDim Preserve pEnd(1 To n * 2)
-                ReDim Preserve pText(1 To n * 2)
-            End If
-            pStart(n) = p.Range.Start
-            pEnd(n) = p.Range.End
-            pText(n) = p.Range.Text
+            AppendParaSegments p.Range.Start, p.Range.End, p.Range.Text, _
+                               pStart, pEnd, pText, n
             Beat "scanning"
         End If
     Next p
@@ -590,15 +591,65 @@ Private Function ScanBlocks(ByVal rng As Range, _
 End Function
 
 
-' Emits the ordinary region between two fence blocks, split so that runs
-' of tab separated rows become their own blocks.  Keeping them separate
-' means the text pass never has to reason about table insertion.
+' Splits Shift+Enter (Chr(11)) soft line breaks inside a paragraph into
+' separate snapshot entries whenever raw range length matches text length.
+Private Sub AppendParaSegments(ByVal rawStart As Long, ByVal rawEnd As Long, _
+                               ByVal rawText As String, _
+                               ByRef pStart() As Long, ByRef pEnd() As Long, _
+                               ByRef pText() As String, ByRef n As Long)
+    Dim segStart As Long
+    Dim pos As Long
+    Dim seg As String
+    Dim segEnd As Long
+
+    If InStr(rawText, Chr$(11)) > 0 And (rawEnd - rawStart) = Len(rawText) Then
+        segStart = 1
+        Do While segStart <= Len(rawText)
+            pos = InStr(segStart, rawText, Chr$(11))
+            If pos > 0 Then
+                seg = Mid$(rawText, segStart, pos - segStart + 1)
+                segEnd = rawStart + pos
+                AppendSnapshotEntry rawStart + segStart - 1, segEnd, seg, pStart, pEnd, pText, n
+                segStart = pos + 1
+            Else
+                seg = Mid$(rawText, segStart)
+                AppendSnapshotEntry rawStart + segStart - 1, rawEnd, seg, pStart, pEnd, pText, n
+                Exit Do
+            End If
+        Loop
+    Else
+        AppendSnapshotEntry rawStart, rawEnd, rawText, pStart, pEnd, pText, n
+    End If
+End Sub
+
+
+Private Sub AppendSnapshotEntry(ByVal sPos As Long, ByVal ePos As Long, _
+                                ByVal txt As String, _
+                                ByRef pStart() As Long, ByRef pEnd() As Long, _
+                                ByRef pText() As String, ByRef n As Long)
+    n = n + 1
+    If n > UBound(pStart) Then
+        ReDim Preserve pStart(1 To n * 2)
+        ReDim Preserve pEnd(1 To n * 2)
+        ReDim Preserve pText(1 To n * 2)
+    End If
+    pStart(n) = sPos
+    pEnd(n) = ePos
+    pText(n) = txt
+End Sub
+
+
+' Emits the ordinary region between two fence blocks, split so that
+' markdown pipe tables and unfenced runs of tab separated rows become
+' their own blocks.  Keeping them separate means the text pass never has
+' to reason about table insertion.
 Private Function FlushPlain(ByRef blks() As Blk, ByVal count As Long, _
                             ByVal firstIdx As Long, ByVal lastIdx As Long, _
                             ByRef pStart() As Long, ByRef pEnd() As Long, _
                             ByRef pText() As String) As Long
     Dim i As Long
     Dim runFrom As Long
+    Dim pipeEnd As Long
     Dim s As String
     Dim nextS As String
     Dim dummy As String
@@ -607,20 +658,31 @@ Private Function FlushPlain(ByRef blks() As Blk, ByVal count As Long, _
     i = firstIdx
     Do While i <= lastIdx
         s = CleanParaText(pText(i))
-        If InStr(s, vbTab) > 0 And Len(s) > 0 And Not IsListMarked(s) Then
-            If runFrom = 0 Then
-                runFrom = i
-            ElseIf pEnd(i - 1) <> pStart(i) Then
-                count = AddBlock(blks, count, BK_TABRUN, runFrom, i - 1, "", True)
-                runFrom = i
-            End If
-            i = i + 1
-        Else
-            If runFrom > 0 Then
-                count = AddBlock(blks, count, BK_TABRUN, runFrom, i - 1, "", True)
+        If runFrom > 0 Then
+            If InStr(s, vbTab) > 0 And Len(s) > 0 And Not IsListMarked(s) Then
+                If pEnd(i - 1) <> pStart(i) Then
+                    count = FlushTabRun(blks, count, runFrom, i - 1, pText)
+                    runFrom = i
+                End If
+                i = i + 1
+            Else
+                count = FlushTabRun(blks, count, runFrom, i - 1, pText)
                 runFrom = 0
             End If
-            If Len(s) = 0 Or IsFenceLine(s, dummy) Then
+        Else
+            pipeEnd = FindPipeTableEnd(i, lastIdx, pStart, pEnd, pText)
+            If pipeEnd > 0 Then
+                count = AddBlock(blks, count, BK_PIPETABLE, i, pipeEnd, "", True)
+                i = pipeEnd + 1
+            ElseIf InStr(s, vbTab) > 0 And Len(s) > 0 And Not IsListMarked(s) Then
+                runFrom = i
+                i = i + 1
+            ElseIf Len(s) = 0 Then
+                If EndsWithSoftBreak(pText(i)) Then
+                    count = AddBlock(blks, count, BK_PLAIN, i, i, "", True)
+                End If
+                i = i + 1
+            ElseIf IsFenceLine(s, dummy) Then
                 i = i + 1
             Else
                 pairedSetext = False
@@ -642,9 +704,100 @@ Private Function FlushPlain(ByRef blks() As Blk, ByVal count As Long, _
         End If
     Loop
     If runFrom > 0 Then
-        count = AddBlock(blks, count, BK_TABRUN, runFrom, lastIdx, "", True)
+        count = FlushTabRun(blks, count, runFrom, lastIdx, pText)
     End If
     FlushPlain = count
+End Function
+
+
+' An unfenced tab run needs at least 2 rows and 2 columns to become a
+' table; a single stray tab line falls back to ordinary plain formatting so
+' it never turns into a 1-row "columns only" grid.
+Private Function FlushTabRun(ByRef blks() As Blk, ByVal count As Long, _
+                             ByVal runFrom As Long, ByVal runTo As Long, _
+                             ByRef pText() As String) As Long
+    Dim k As Long
+    Dim rows As Long, maxCols As Long, cols As Long
+    Dim s As String
+
+    For k = runFrom To runTo
+        s = CleanParaText(pText(k))
+        If Len(s) > 0 Then
+            rows = rows + 1
+            cols = CountChar(s, vbTab) + 1
+            If cols > maxCols Then maxCols = cols
+        End If
+    Next k
+
+    If rows >= 2 And maxCols >= 2 Then
+        FlushTabRun = AddBlock(blks, count, BK_TABRUN, runFrom, runTo, "", True)
+    Else
+        For k = runFrom To runTo
+            s = CleanParaText(pText(k))
+            If Len(s) > 0 Or EndsWithSoftBreak(pText(k)) Then
+                count = AddBlock(blks, count, BK_PLAIN, k, k, "", True)
+            End If
+        Next k
+        FlushTabRun = count
+    End If
+End Function
+
+
+Private Function FindPipeTableEnd(ByVal idx As Long, ByVal lastIdx As Long, _
+                                  ByRef pStart() As Long, ByRef pEnd() As Long, _
+                                  ByRef pText() As String) As Long
+    Dim s0 As String, s1 As String, sj As String
+    Dim j As Long, endIdx As Long
+    Dim dummy As String
+
+    s0 = CleanParaText(pText(idx))
+    If Not IsPipeRow(s0) Then Exit Function
+    If PipeColumnCount(s0) < 2 Then Exit Function
+
+    ' Standard GFM pipe table: header row followed by | :--- | :--- |
+    If idx < lastIdx Then
+        If pEnd(idx) = pStart(idx + 1) Then
+            s1 = CleanParaText(pText(idx + 1))
+            If IsPipeSeparator(s1) Then
+                endIdx = idx + 1
+                j = idx + 2
+                Do While j <= lastIdx
+                    If pEnd(j - 1) <> pStart(j) Then Exit Do
+                    sj = CleanParaText(pText(j))
+                    If Len(sj) = 0 Or IsFenceLine(sj, dummy) Then Exit Do
+                    If Not IsPipeRow(sj) Or IsPipeSeparator(sj) Then Exit Do
+                    endIdx = j
+                    j = j + 1
+                Loop
+                FindPipeTableEnd = endIdx
+                Exit Function
+            End If
+        End If
+    End If
+
+    ' Bordered pipe rows (| a | b |) without a separator row: require >= 2 rows.
+    If IsBorderedPipeRow(s0) And Not IsPipeSeparator(s0) Then
+        endIdx = idx
+        j = idx + 1
+        Do While j <= lastIdx
+            If pEnd(j - 1) <> pStart(j) Then Exit Do
+            sj = CleanParaText(pText(j))
+            If Len(sj) = 0 Or IsFenceLine(sj, dummy) Then Exit Do
+            If IsBorderedPipeRow(sj) And PipeColumnCount(sj) >= 2 And Not IsPipeSeparator(sj) Then
+                endIdx = j
+                j = j + 1
+            Else
+                Exit Do
+            End If
+        Loop
+        If endIdx > idx Then FindPipeTableEnd = endIdx
+    End If
+End Function
+
+
+Private Function EndsWithSoftBreak(ByVal rawText As String) As Boolean
+    If Len(rawText) = 0 Then Exit Function
+    EndsWithSoftBreak = (Right$(rawText, 1) = Chr$(11))
 End Function
 
 
@@ -743,6 +896,11 @@ Private Sub ApplyCodeBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As 
     Dim joined As String
     Dim replaceEnd As Long
     Dim r As Range
+    Dim endsWithSoftBreak As Boolean
+
+    If hi > lo Then
+        endsWithSoftBreak = (doc.Range(hi - 1, hi).Text = Chr$(11))
+    End If
 
     If b.Closed Then
         nBody = b.Last - b.First - 1
@@ -760,8 +918,12 @@ Private Sub ApplyCodeBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As 
         Exit Sub
     End If
 
-    replaceEnd = ContentEndBeforeCr(doc, lo, hi)
-    doc.Range(lo, replaceEnd).Text = joined
+    If endsWithSoftBreak Then
+        doc.Range(lo, hi).Text = joined & vbCr
+    Else
+        replaceEnd = ContentEndBeforeCr(doc, lo, hi)
+        doc.Range(lo, replaceEnd).Text = joined
+    End If
     Set r = doc.Range(lo, lo + Len(joined))
     If r.End <= r.Start Then Exit Sub
 
@@ -771,9 +933,12 @@ Private Sub ApplyCodeBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As 
         .Size = 10
         .Color = RGB(45, 45, 45)
         .Bold = False
+        .BoldBi = False
         .Italic = False
+        .ItalicBi = False
     End With
     With r.ParagraphFormat
+        .ReadingOrder = wdReadingOrderLtr
         .LeftIndent = 18
         .RightIndent = 18
         .SpaceBefore = 0
@@ -808,6 +973,7 @@ Private Sub ApplyFenceWithBody(ByVal doc As Document, ByVal lo As Long, ByVal hi
     Dim cols As Long, rows As Long
     Dim data() As String
     Dim endPos As Long
+    Dim closeSoftBreak As Boolean
 
     If b.Closed Then
         nBody = b.Last - b.First - 1
@@ -817,6 +983,10 @@ Private Sub ApplyFenceWithBody(ByVal doc As Document, ByVal lo As Long, ByVal hi
     If nBody < 1 Then
         doc.Range(lo, hi).Delete
         Exit Sub
+    End If
+
+    If hi > lo Then
+        closeSoftBreak = (doc.Range(hi - 1, hi).Text = Chr$(11))
     End If
 
     ReDim runStart(1 To nBody)
@@ -859,7 +1029,13 @@ Private Sub ApplyFenceWithBody(ByVal doc As Document, ByVal lo As Long, ByVal hi
     ' so the line and run offsets above have to follow before anything else is cut.
     shift = Len(pText(b.First))
     doc.Range(lo, runStart(1)).Delete
-    If runEnd(nBody) < hi Then doc.Range(runEnd(nBody) - shift, hi - shift).Delete
+    If runEnd(nBody) < hi Then
+        If closeSoftBreak Then
+            doc.Range(runEnd(nBody) - shift, hi - shift).Text = vbCr
+        Else
+            doc.Range(runEnd(nBody) - shift, hi - shift).Delete
+        End If
+    End If
     For i = 1 To nBody
         runStart(i) = runStart(i) - shift
         runEnd(i) = runEnd(i) - shift
@@ -896,9 +1072,15 @@ Private Sub ApplyFenceWithBody(ByVal doc As Document, ByVal lo As Long, ByVal hi
                 BuildTableAt doc, rFrom(a), data, rows, cols
             End If
         Else
+            If rTo(a) > rFrom(a) Then
+                If doc.Range(rTo(a) - 1, rTo(a)).Text = Chr$(11) Then
+                    doc.Range(rTo(a) - 1, rTo(a)).Text = vbCr
+                End If
+            End If
             endPos = ContentEndBeforeCr(doc, rFrom(a), rTo(a))
             If endPos > rFrom(a) Then
                 On Error Resume Next
+                CollapseDashesInRange doc.Range(rFrom(a), endPos)
                 InlinePass doc.Range(rFrom(a), endPos)
                 Err.Clear
                 On Error GoTo 0
@@ -925,7 +1107,7 @@ Private Sub ApplyTabRun(ByVal doc As Document, ByVal lo As Long, ByVal hi As Lon
             If CountChar(s, vbTab) + 1 > cols Then cols = CountChar(s, vbTab) + 1
         End If
     Next i
-    If rows < 1 Or cols < 2 Then Exit Sub
+    If rows < 2 Or cols < 2 Then Exit Sub
 
     ReDim data(0 To rows - 1, 0 To cols - 1)
     rows = 0
@@ -933,6 +1115,45 @@ Private Sub ApplyTabRun(ByVal doc As Document, ByVal lo As Long, ByVal hi As Lon
         s = CleanParaText(pText(i))
         If Len(s) > 0 Then
             FillRow data, rows, s, cols
+            rows = rows + 1
+        End If
+    Next i
+
+    doc.Range(lo, hi).Delete
+    BuildTableAt doc, lo, data, rows, cols
+End Sub
+
+
+' Markdown pipe table (| a | b |).
+Private Sub ApplyPipeTable(ByVal doc As Document, ByVal lo As Long, ByVal hi As Long, _
+                           ByRef b As Blk, ByRef pText() As String, ByVal doTables As Boolean)
+    Dim i As Long, c As Long
+    Dim cols As Long, rows As Long, colCnt As Long
+    Dim data() As String
+    Dim cells() As String
+    Dim s As String
+
+    If Not doTables Then Exit Sub
+
+    For i = b.First To b.Last
+        s = CleanParaText(pText(i))
+        If Len(s) > 0 And Not IsPipeSeparator(s) Then
+            rows = rows + 1
+            colCnt = PipeColumnCount(s)
+            If colCnt > cols Then cols = colCnt
+        End If
+    Next i
+    If rows < 1 Or cols < 2 Then Exit Sub
+
+    ReDim data(0 To rows - 1, 0 To cols - 1)
+    rows = 0
+    For i = b.First To b.Last
+        s = CleanParaText(pText(i))
+        If Len(s) > 0 And Not IsPipeSeparator(s) Then
+            cells = SplitPipeRow(s, cols)
+            For c = 0 To cols - 1
+                data(rows, c) = NormalizeDashes(cells(c))
+            Next c
             rows = rows + 1
         End If
     Next i
@@ -952,7 +1173,7 @@ Private Sub FillRow(ByRef data() As String, ByVal rowIdx As Long, _
     n = UBound(parts)
     For k = 0 To cols - 1
         If k <= n Then
-            data(rowIdx, k) = Trim$(parts(k))
+            data(rowIdx, k) = NormalizeDashes(Trim$(parts(k)))
         Else
             data(rowIdx, k) = ""
         End If
@@ -964,10 +1185,12 @@ End Sub
 ' whole block is rewritten once and formatted inside the new range.
 Private Sub ApplyPlainBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As Long, _
                             ByRef b As Blk, ByRef pText() As String)
-    Dim n As Long, i As Long, m As Long
+    Dim n As Long, i As Long, k As Long, m As Long
     Dim outText() As String
     Dim outKind() As Long
     Dim outArg() As Long
+    Dim splitLines() As String
+    Dim nSplit As Long
     Dim raw As String, s As String
     Dim joined As String
     Dim replaceEnd As Long
@@ -976,7 +1199,15 @@ Private Sub ApplyPlainBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As
     Dim idx As Long
     Dim lvl As Long
     Dim num As Long
+    Dim numPrefix As String, numBody As String
     Dim isRtl As Boolean
+    Dim endsWithSoftBreak As Boolean
+    Dim origClean As String
+    Dim hrDropped As Boolean
+
+    If hi > lo Then
+        endsWithSoftBreak = (doc.Range(hi - 1, hi).Text = Chr$(11))
+    End If
 
     n = b.Last - b.First + 1
     ReDim outText(1 To n)
@@ -989,17 +1220,14 @@ Private Sub ApplyPlainBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As
         s = CleanParaText(raw)
 
         If Len(s) = 0 Then
-            m = m + 1
-            outText(m) = ""
-            outKind(m) = LK_TEXT
-            outArg(m) = 0
+            If Not endsWithSoftBreak Then
+                AppendPlainOut outText, outKind, outArg, m, "", LK_TEXT, 0
+            End If
         Else
             lvl = AtxLevel(s)
             If lvl > 0 Then
-                m = m + 1
-                outText(m) = Mid$(s, lvl + 2)
-                outKind(m) = LK_HEADING
-                outArg(m) = lvl
+                AppendPlainOut outText, outKind, outArg, m, _
+                    NormalizeDashes(Trim$(Mid$(s, lvl + 2))), LK_HEADING, lvl
             ElseIf IsSetextContinuation(s, m, outKind, outText) Then
                 ' The line above this one becomes the heading.
                 outKind(m) = LK_HEADING
@@ -1009,38 +1237,61 @@ Private Sub ApplyPlainBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As
                     outArg(m) = 2
                 End If
             ElseIf IsHorizontalRule(s) Then
-                ' dropped entirely
+                hrDropped = True
             ElseIf Left$(s, 1) = ">" Then
-                m = m + 1
-                outText(m) = TrimQuoteMarker(s)
-                outKind(m) = LK_QUOTE
-                outArg(m) = 0
+                AppendPlainOut outText, outKind, outArg, m, _
+                    NormalizeDashes(TrimQuoteMarker(s)), LK_QUOTE, 0
             ElseIf IsBulletStart(s) Then
-                m = m + 1
-                outText(m) = mBullet & vbTab & Mid$(s, 3)
-                outKind(m) = LK_BULLET
-                outArg(m) = 0
-            ElseIf IsNumberedStart(s, num) Then
-                m = m + 1
-                outText(m) = CStr(num) & "." & vbTab & NumberedBody(s, num)
-                outKind(m) = LK_NUMBERED
-                outArg(m) = 0
+                AppendPlainOut outText, outKind, outArg, m, _
+                    mBullet & vbTab & NormalizeDashes(Mid$(s, 3)), LK_BULLET, 0
             Else
-                m = m + 1
-                outText(m) = s
-                outKind(m) = LK_TEXT
-                outArg(m) = 0
+                nSplit = SplitSequentialNumbered(s, splitLines)
+                If nSplit > 1 Then
+                    For k = 1 To nSplit
+                        If ParseNumberedPrefix(splitLines(k), numPrefix, num, numBody) Then
+                            AppendPlainOut outText, outKind, outArg, m, _
+                                numPrefix & "." & vbTab & NormalizeDashes(numBody), LK_NUMBERED, 0
+                        Else
+                            AppendPlainOut outText, outKind, outArg, m, _
+                                NormalizeDashes(splitLines(k)), LK_TEXT, 0
+                        End If
+                    Next k
+                ElseIf ParseNumberedPrefix(s, numPrefix, num, numBody) Then
+                    AppendPlainOut outText, outKind, outArg, m, _
+                        numPrefix & "." & vbTab & NormalizeDashes(numBody), LK_NUMBERED, 0
+                Else
+                    AppendPlainOut outText, outKind, outArg, m, _
+                        NormalizeDashes(s), LK_TEXT, 0
+                End If
             End If
         End If
     Next i
 
     If m = 0 Then
-        doc.Range(lo, hi).Delete
+        If hrDropped Then
+            doc.Range(lo, hi).Delete
+        ElseIf endsWithSoftBreak Then
+            doc.Range(lo, hi).Text = vbCr
+        Else
+            doc.Range(lo, hi).Delete
+        End If
         Exit Sub
     End If
 
-    If m = 1 Then
+    If m = 1 And Not endsWithSoftBreak Then
         If outKind(1) = LK_TEXT And Not HasInlineMarkers(outText(1)) Then
+            origClean = CleanParaText(pText(b.First))
+            If outText(1) = origClean Then Exit Sub
+            ' Only dash normalization changed this plain paragraph; update in
+            ' place so existing heading/emoji formatting stays intact.
+            replaceEnd = ContentEndBeforeCr(doc, lo, hi)
+            If replaceEnd > lo Then
+                Set r = doc.Range(lo, replaceEnd)
+                CollapseDashesInRange r
+                If NormalizeDashes(CleanParaText(r.Text)) <> CleanParaText(r.Text) Then
+                    r.Text = outText(1)
+                End If
+            End If
             Exit Sub
         End If
     End If
@@ -1050,8 +1301,12 @@ Private Sub ApplyPlainBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As
         joined = joined & outText(i)
     Next i
 
-    replaceEnd = ContentEndBeforeCr(doc, lo, hi)
-    doc.Range(lo, replaceEnd).Text = joined
+    If endsWithSoftBreak Then
+        doc.Range(lo, hi).Text = joined & vbCr
+    Else
+        replaceEnd = ContentEndBeforeCr(doc, lo, hi)
+        doc.Range(lo, replaceEnd).Text = joined
+    End If
     Set r = doc.Range(lo, lo + Len(joined))
     If r.End <= r.Start Then Exit Sub
 
@@ -1068,16 +1323,22 @@ Private Sub ApplyPlainBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As
             Case LK_BULLET, LK_NUMBERED
                 isRtl = IsRtlText(outText(idx))
                 If isRtl Then
+                    p.Range.ParagraphFormat.ReadingOrder = wdReadingOrderRtl
                     p.Range.ParagraphFormat.RightIndent = 24
                     p.Range.ParagraphFormat.LeftIndent = 0
                 Else
+                    p.Range.ParagraphFormat.ReadingOrder = wdReadingOrderLtr
                     p.Range.ParagraphFormat.LeftIndent = 24
                     p.Range.ParagraphFormat.RightIndent = 0
                 End If
                 p.Range.ParagraphFormat.FirstLineIndent = -18
             Case LK_QUOTE
                 p.Range.Font.Italic = True
+                p.Range.Font.ItalicBi = True
                 p.Range.Font.Color = RGB(85, 85, 85)
+                If IsRtlText(outText(idx)) Then
+                    p.Range.ParagraphFormat.ReadingOrder = wdReadingOrderRtl
+                End If
                 p.Range.ParagraphFormat.LeftIndent = 24
                 p.Range.ParagraphFormat.RightIndent = 24
                 p.Range.Borders(wdBorderRight).LineStyle = wdLineStyleSingle
@@ -1092,6 +1353,21 @@ Private Sub ApplyPlainBlock(ByVal doc As Document, ByVal lo As Long, ByVal hi As
     InlinePass r
     Err.Clear
     On Error GoTo 0
+End Sub
+
+
+Private Sub AppendPlainOut(ByRef outText() As String, ByRef outKind() As Long, _
+                           ByRef outArg() As Long, ByRef m As Long, _
+                           ByVal txt As String, ByVal kind As Long, ByVal arg As Long)
+    m = m + 1
+    If m > UBound(outText) Then
+        ReDim Preserve outText(1 To m * 2)
+        ReDim Preserve outKind(1 To m * 2)
+        ReDim Preserve outArg(1 To m * 2)
+    End If
+    outText(m) = txt
+    outKind(m) = kind
+    outArg(m) = arg
 End Sub
 
 
@@ -1119,6 +1395,9 @@ Private Sub ApplyHeading(ByVal p As Paragraph, ByVal level As Long)
         Case Else: styleId = wdStyleHeading5
     End Select
     p.Range.Style = p.Range.Document.Styles(styleId)
+    If IsRtlText(p.Range.Text) Then
+        p.Range.ParagraphFormat.ReadingOrder = wdReadingOrderRtl
+    End If
     p.Range.ParagraphFormat.LeftIndent = 0
     p.Range.ParagraphFormat.RightIndent = 0
     p.Range.ParagraphFormat.FirstLineIndent = 0
@@ -1187,28 +1466,515 @@ Private Function IsBulletStart(ByVal s As String) As Boolean
 End Function
 
 
-' Accepts "12. text" and reports the number.
-Private Function IsNumberedStart(ByVal s As String, ByRef num As Long) As Boolean
+' Numeric value 0..9 for ASCII, Persian (06F0..06F9), and Arabic-Indic
+' (0660..0669) digits, or -1 otherwise.
+Private Function DigitValue(ByVal ch As String) As Long
+    Dim code As Long
+    If Len(ch) <> 1 Then
+        DigitValue = -1
+        Exit Function
+    End If
+    code = AscW(ch)
+    If code < 0 Then code = code + 65536
+    If code >= 48 And code <= 57 Then
+        DigitValue = code - 48
+    ElseIf code >= &H6F0 And code <= &H6F9 Then
+        DigitValue = code - &H6F0
+    ElseIf code >= &H660 And code <= &H669 Then
+        DigitValue = code - &H660
+    Else
+        DigitValue = -1
+    End If
+End Function
+
+
+Private Function ParseDigits(ByVal s As String) As Long
+    Dim i As Long, d As Long, acc As Long
+    For i = 1 To Len(s)
+        d = DigitValue(Mid$(s, i, 1))
+        If d < 0 Then
+            ParseDigits = -1
+            Exit Function
+        End If
+        acc = acc * 10 + d
+    Next i
+    ParseDigits = acc
+End Function
+
+
+Private Function IsSpaceChar(ByVal ch As String) As Boolean
+    Dim code As Long
+    If Len(ch) <> 1 Then Exit Function
+    If ch = " " Or ch = vbTab Then
+        IsSpaceChar = True
+        Exit Function
+    End If
+    code = AscW(ch)
+    If code < 0 Then code = code + 65536
+    If code = &HA0 Or code = &H200C Or code = &H200E Or code = &H200F Then
+        ' Note: ZWNJ (200C) stays within words; NBSP (A0) and directional marks act as separators.
+        If code <> &H200C Then IsSpaceChar = True
+    End If
+End Function
+
+
+' Accepts "12. text" (including Persian/Arabic-Indic numerals).
+Private Function ParseNumberedPrefix(ByVal s As String, ByRef prefix As String, _
+                                     ByRef num As Long, ByRef body As String) As Boolean
     Dim pos As Long
-    Dim prefix As String
-    pos = InStr(s, ". ")
-    If pos < 2 Or pos > 5 Then Exit Function
+    Dim sep As String
+    pos = InStr(s, ".")
+    If pos < 2 Or pos > 5 Or pos >= Len(s) Then Exit Function
+    sep = Mid$(s, pos + 1, 1)
+    If Not IsSpaceChar(sep) Then Exit Function
     prefix = Left$(s, pos - 1)
     If Not IsAllDigits(prefix) Then Exit Function
-    num = CLng(prefix)
-    IsNumberedStart = True
+    num = ParseDigits(prefix)
+    If num < 0 Then Exit Function
+    body = Mid$(s, pos + 2)
+    ParseNumberedPrefix = True
+End Function
+
+
+Private Function IsNumberedStart(ByVal s As String, ByRef num As Long) As Boolean
+    Dim prefix As String, body As String
+    IsNumberedStart = ParseNumberedPrefix(s, prefix, num, body)
 End Function
 
 
 Private Function IsAllDigits(ByVal s As String) As Boolean
     Dim i As Long
-    Dim ch As String
     If Len(s) = 0 Then Exit Function
     For i = 1 To Len(s)
-        ch = Mid$(s, i, 1)
-        If ch < "0" Or ch > "9" Then Exit Function
+        If DigitValue(Mid$(s, i, 1)) < 0 Then Exit Function
     Next i
     IsAllDigits = True
+End Function
+
+
+Private Function IsSentenceBoundaryChar(ByVal ch As String) As Boolean
+    Dim code As Long
+    If Len(ch) <> 1 Then Exit Function
+    If InStr(".?!:;)]" & Chr$(34) & "'", ch) > 0 Then
+        IsSentenceBoundaryChar = True
+        Exit Function
+    End If
+    code = AscW(ch)
+    If code < 0 Then code = code + 65536
+    ' Arabic question mark (061F), semicolon (061B), comma (060C), guillemet (00BB), dashes
+    If code = &H61F Or code = &H61B Or code = &H60C Or code = &HBB Or _
+       code = &H2014 Or code = &H2013 Then
+        IsSentenceBoundaryChar = True
+    End If
+End Function
+
+
+Private Function HasSequentialNumbered(ByVal s As String) As Boolean
+    Dim parts() As String
+    HasSequentialNumbered = (SplitSequentialNumbered(s, parts) > 1)
+End Function
+
+
+' Splits inline sequential numbered lists such as "۱. اول. ۲. دوم. ۳. سوم."
+' (or "مقدمه: ۱. اول. ۲. دوم.") into vertical items while avoiding prose
+' numbers like "1. Read chapter 2. Today".
+Private Function SplitSequentialNumbered(ByVal s As String, ByRef outLines() As String) As Long
+    Dim nLen As Long, i As Long, j As Long
+    Dim closeTick As Long, closeParen As Long
+    Dim dLen As Long, numVal As Long
+    Dim candPos() As Long, candNum() As Long
+    Dim candPunct() As Boolean, candColon() As Boolean
+    Dim nCand As Long
+    Dim prevCh As String, prevNonWs As String
+    Dim isPunct As Boolean, isColon As Boolean
+    Dim chainIdx() As Long
+    Dim chainLen As Long, startIdx As Long, wantNum As Long
+    Dim allPunct As Boolean
+    Dim outCount As Long, k As Long, segFrom As Long, segTo As Long
+    Dim piece As String
+
+    nLen = Len(s)
+    If nLen < 6 Or InStr(s, ".") = 0 Then Exit Function
+
+    ReDim candPos(1 To 16)
+    ReDim candNum(1 To 16)
+    ReDim candPunct(1 To 16)
+    ReDim candColon(1 To 16)
+    nCand = 0
+
+    i = 1
+    Do While i <= nLen
+        If Mid$(s, i, 1) = "`" Then
+            closeTick = InStr(i + 1, s, "`")
+            If closeTick > 0 Then
+                i = closeTick + 1
+            Else
+                i = i + 1
+            End If
+        ElseIf Mid$(s, i, 2) = "](" Then
+            closeParen = InStr(i + 2, s, ")")
+            If closeParen > 0 Then
+                i = closeParen + 1
+            Else
+                i = i + 1
+            End If
+        Else
+            prevCh = ""
+            If i > 1 Then prevCh = Mid$(s, i - 1, 1)
+            If i = 1 Or IsSpaceChar(prevCh) Then
+                dLen = 0
+                Do While i + dLen <= nLen And dLen < 4
+                    If DigitValue(Mid$(s, i + dLen, 1)) >= 0 Then
+                        dLen = dLen + 1
+                    Else
+                        Exit Do
+                    End If
+                Loop
+                If dLen >= 1 And dLen <= 3 And i + dLen + 1 <= nLen Then
+                    If Mid$(s, i + dLen, 1) = "." And IsSpaceChar(Mid$(s, i + dLen + 1, 1)) Then
+                        If Len(Trim$(Mid$(s, i + dLen + 2))) > 0 Then
+                            numVal = ParseDigits(Mid$(s, i, dLen))
+                            isPunct = False
+                            isColon = False
+                            If i > 1 Then
+                                j = i - 1
+                                Do While j >= 1
+                                    prevNonWs = Mid$(s, j, 1)
+                                    If Not IsSpaceChar(prevNonWs) Then Exit Do
+                                    j = j - 1
+                                Loop
+                                If j >= 1 Then
+                                    isColon = (prevNonWs = ":")
+                                    isPunct = IsSentenceBoundaryChar(prevNonWs)
+                                End If
+                            End If
+                            nCand = nCand + 1
+                            If nCand > UBound(candPos) Then
+                                ReDim Preserve candPos(1 To nCand * 2)
+                                ReDim Preserve candNum(1 To nCand * 2)
+                                ReDim Preserve candPunct(1 To nCand * 2)
+                                ReDim Preserve candColon(1 To nCand * 2)
+                            End If
+                            candPos(nCand) = i
+                            candNum(nCand) = numVal
+                            candPunct(nCand) = isPunct
+                            candColon(nCand) = isColon
+                            i = i + dLen + 2
+                        Else
+                            i = i + 1
+                        End If
+                    Else
+                        i = i + 1
+                    End If
+                Else
+                    i = i + 1
+                End If
+            Else
+                i = i + 1
+            End If
+        End If
+    Loop
+
+    If nCand < 2 Then Exit Function
+
+    startIdx = 0
+    If candPos(1) = 1 And candNum(1) >= 1 And candNum(1) <= 50 Then
+        startIdx = 1
+    Else
+        For i = 1 To nCand
+            If candNum(i) = 1 And candColon(i) Then
+                startIdx = i
+                Exit For
+            End If
+        Next i
+    End If
+    If startIdx = 0 Then Exit Function
+
+    ReDim chainIdx(1 To nCand)
+    chainLen = 1
+    chainIdx(1) = startIdx
+    wantNum = candNum(startIdx) + 1
+    allPunct = True
+
+    For i = startIdx + 1 To nCand
+        If candNum(i) = wantNum Then
+            chainLen = chainLen + 1
+            chainIdx(chainLen) = i
+            If Not candPunct(i) Then allPunct = False
+            wantNum = wantNum + 1
+        End If
+    Next i
+
+    If chainLen < 2 Then Exit Function
+    If chainLen = 2 Then
+        If candNum(chainIdx(1)) <> 1 Or Not allPunct Then Exit Function
+    End If
+
+    ReDim outLines(1 To chainLen + 1)
+    outCount = 0
+    If candPos(chainIdx(1)) > 1 Then
+        piece = Trim$(Left$(s, candPos(chainIdx(1)) - 1))
+        If Len(piece) > 0 Then
+            outCount = outCount + 1
+            outLines(outCount) = piece
+        End If
+    End If
+    For k = 1 To chainLen
+        segFrom = candPos(chainIdx(k))
+        If k < chainLen Then
+            segTo = candPos(chainIdx(k + 1)) - 1
+        Else
+            segTo = nLen
+        End If
+        piece = Trim$(Mid$(s, segFrom, segTo - segFrom + 1))
+        If Len(piece) > 0 Then
+            outCount = outCount + 1
+            outLines(outCount) = piece
+        End If
+    Next k
+
+    If outCount > 1 Then SplitSequentialNumbered = outCount
+End Function
+
+
+'-----------------------------------------------------------------------
+'  Dash normalization
+'-----------------------------------------------------------------------
+
+Private Function IsUnicodeDashChar(ByVal ch As String) As Boolean
+    Dim code As Long
+    If Len(ch) <> 1 Then Exit Function
+    code = AscW(ch)
+    If code < 0 Then code = code + 65536
+    If code = &H2013 Or code = &H2014 Or code = &H2015 Or code = &H2500 Then
+        IsUnicodeDashChar = True
+    End If
+End Function
+
+
+Private Function HasDashRunHint(ByVal s As String) As Boolean
+    Dim em As String, en As String, bar As String, box As String
+    em = ChrW$(&H2014)
+    en = ChrW$(&H2013)
+    bar = ChrW$(&H2015)
+    box = ChrW$(&H2500)
+    If InStr(s, em & em) > 0 Or InStr(s, en & en) > 0 Or _
+       InStr(s, bar & bar) > 0 Or InStr(s, box & box) > 0 Or _
+       InStr(s, em & en) > 0 Or InStr(s, en & em) > 0 Or _
+       InStr(s, " -- ") > 0 Or InStr(s, " --- ") > 0 Then
+        HasDashRunHint = True
+    End If
+End Function
+
+
+' Collapses repeated dashes (e.g., "——", "––", " -- ") outside inline code
+' spans and link URLs to a single standard em-dash ("—").
+Private Function NormalizeDashes(ByVal s As String) As String
+    Dim nLen As Long, i As Long, j As Long
+    Dim closeTick As Long, closeParen As Long
+    Dim ch As String, prevCh As String, nextCh As String
+    Dim em As String
+    Dim hasUnicode As Boolean
+    Dim outBuf As String
+
+    If Len(s) < 2 Then
+        NormalizeDashes = s
+        Exit Function
+    End If
+
+    em = ChrW$(&H2014)
+    nLen = Len(s)
+    i = 1
+    Do While i <= nLen
+        ch = Mid$(s, i, 1)
+        If ch = "`" Then
+            closeTick = InStr(i + 1, s, "`")
+            If closeTick > 0 Then
+                outBuf = outBuf & Mid$(s, i, closeTick - i + 1)
+                i = closeTick + 1
+            Else
+                outBuf = outBuf & ch
+                i = i + 1
+            End If
+        ElseIf Mid$(s, i, 2) = "](" Then
+            closeParen = InStr(i + 2, s, ")")
+            If closeParen > 0 Then
+                outBuf = outBuf & Mid$(s, i, closeParen - i + 1)
+                i = closeParen + 1
+            Else
+                outBuf = outBuf & ch
+                i = i + 1
+            End If
+        ElseIf IsUnicodeDashChar(ch) Or ch = "-" Then
+            hasUnicode = IsUnicodeDashChar(ch)
+            j = i + 1
+            Do While j <= nLen
+                nextCh = Mid$(s, j, 1)
+                If IsUnicodeDashChar(nextCh) Then
+                    hasUnicode = True
+                    j = j + 1
+                ElseIf nextCh = "-" Then
+                    j = j + 1
+                Else
+                    Exit Do
+                End If
+            Loop
+            If j - i >= 2 Then
+                prevCh = ""
+                If i > 1 Then prevCh = Mid$(s, i - 1, 1)
+                nextCh = ""
+                If j <= nLen Then nextCh = Mid$(s, j, 1)
+                If hasUnicode Then
+                    outBuf = outBuf & em
+                ElseIf prevCh = " " And nextCh = " " Then
+                    outBuf = outBuf & em
+                ElseIf Len(prevCh) > 0 And Len(nextCh) > 0 And _
+                       prevCh <> " " And prevCh <> vbTab And _
+                       nextCh <> " " And nextCh <> vbTab Then
+                    outBuf = outBuf & em
+                Else
+                    outBuf = outBuf & Mid$(s, i, j - i)
+                End If
+            Else
+                outBuf = outBuf & ch
+            End If
+            i = j
+        Else
+            outBuf = outBuf & ch
+            i = i + 1
+        End If
+    Loop
+    NormalizeDashes = outBuf
+End Function
+
+
+Private Sub CollapseDashesInRange(ByVal r As Range)
+    Dim em As String, en As String, bar As String, box As String
+    em = ChrW$(&H2014)
+    en = ChrW$(&H2013)
+    bar = ChrW$(&H2015)
+    box = ChrW$(&H2500)
+
+    ReplaceAllInRange r, em & em, em
+    ReplaceAllInRange r, en & en, em
+    ReplaceAllInRange r, bar & bar, em
+    ReplaceAllInRange r, box & box, em
+    ReplaceAllInRange r, em & en, em
+    ReplaceAllInRange r, en & em, em
+    ReplaceAllInRange r, em & "-", em
+    ReplaceAllInRange r, "-" & em, em
+    ReplaceAllInRange r, " --- ", " " & em & " "
+    ReplaceAllInRange r, " -- ", " " & em & " "
+End Sub
+
+
+Private Sub ReplaceAllInRange(ByVal r As Range, ByVal findStr As String, ByVal replStr As String)
+    Dim guard As Long
+    On Error Resume Next
+    Do While InStr(r.Text, findStr) > 0 And guard < 20
+        guard = guard + 1
+        With r.Find
+            .ClearFormatting
+            .Replacement.ClearFormatting
+            .Text = findStr
+            .Replacement.Text = replStr
+            .Forward = True
+            .Wrap = wdFindStop
+            .Format = False
+            .MatchWildcards = False
+            .Execute Replace:=wdReplaceAll
+        End With
+    Loop
+    Err.Clear
+    On Error GoTo 0
+End Sub
+
+
+'-----------------------------------------------------------------------
+'  Markdown pipe table helpers
+'-----------------------------------------------------------------------
+
+Private Function IsPipeRow(ByVal s As String) As Boolean
+    If InStr(s, "|") = 0 Then Exit Function
+    IsPipeRow = (PipeColumnCount(s) >= 2)
+End Function
+
+
+Private Function IsBorderedPipeRow(ByVal s As String) As Boolean
+    Dim t As String
+    t = Trim$(s)
+    If Len(t) < 3 Then Exit Function
+    If Left$(t, 1) = "|" And Right$(t, 1) = "|" And CountChar(t, "|") >= 2 Then
+        IsBorderedPipeRow = True
+    End If
+End Function
+
+
+Private Function IsPipeSeparator(ByVal s As String) As Boolean
+    Dim t As String
+    Dim parts() As String
+    Dim i As Long, j As Long
+    Dim cell As String, ch As String
+    Dim hasDash As Boolean
+
+    t = Trim$(s)
+    If Len(t) < 3 Or InStr(t, "|") = 0 Or InStr(t, "-") = 0 Then Exit Function
+    If Left$(t, 1) = "|" Then t = Mid$(t, 2)
+    If Right$(t, 1) = "|" Then t = Left$(t, Len(t) - 1)
+    parts = Split(t, "|")
+    If UBound(parts) < 1 Then Exit Function
+
+    For i = LBound(parts) To UBound(parts)
+        cell = Trim$(parts(i))
+        If Len(cell) = 0 Then Exit Function
+        hasDash = False
+        For j = 1 To Len(cell)
+            ch = Mid$(cell, j, 1)
+            If ch = "-" Then
+                hasDash = True
+            ElseIf ch <> ":" Then
+                Exit Function
+            End If
+        Next j
+        If Not hasDash Then Exit Function
+    Next i
+    IsPipeSeparator = True
+End Function
+
+
+Private Function PipeColumnCount(ByVal s As String) As Long
+    Dim t As String
+    t = Trim$(s)
+    If Len(t) < 2 Or InStr(t, "|") = 0 Then Exit Function
+    If Left$(t, 1) = "|" Then t = Mid$(t, 2)
+    If Right$(t, 1) = "|" And Len(t) > 0 Then t = Left$(t, Len(t) - 1)
+    If Len(t) = 0 Then Exit Function
+    PipeColumnCount = CountChar(t, "|") + 1
+End Function
+
+
+Private Function SplitPipeRow(ByVal s As String, ByVal cols As Long) As String()
+    Dim t As String
+    Dim parts() As String
+    Dim res() As String
+    Dim k As Long, n As Long
+
+    t = Trim$(s)
+    If Len(t) >= 2 Then
+        If Left$(t, 1) = "|" Then t = Mid$(t, 2)
+        If Right$(t, 1) = "|" And Len(t) > 0 Then t = Left$(t, Len(t) - 1)
+    End If
+    parts = Split(t, "|")
+    ReDim res(0 To cols - 1)
+    n = UBound(parts)
+    For k = 0 To cols - 1
+        If k <= n Then
+            res(k) = Trim$(parts(k))
+        Else
+            res(k) = ""
+        End If
+    Next k
+    SplitPipeRow = res
 End Function
 
 
@@ -1217,11 +1983,6 @@ Private Function HasInlineMarkers(ByVal s As String) As Boolean
     If InStr(s, "~") > 0 Then HasInlineMarkers = True: Exit Function
     If InStr(s, "`") > 0 Then HasInlineMarkers = True: Exit Function
     If InStr(s, "[") > 0 And InStr(s, "](") > 0 Then HasInlineMarkers = True
-End Function
-
-
-Private Function NumberedBody(ByVal s As String, ByVal num As Long) As String
-    NumberedBody = Mid$(s, Len(CStr(num)) + 3)
 End Function
 
 
@@ -1271,8 +2032,10 @@ Private Sub InlineStyle(ByVal r As Range, ByVal pattern As String, _
         Select Case styleId
             Case IL_BOLD
                 .Replacement.Font.Bold = True
+                .Replacement.Font.BoldBi = True
             Case IL_ITALIC
                 .Replacement.Font.Italic = True
+                .Replacement.Font.ItalicBi = True
             Case IL_STRIKE
                 .Replacement.Font.StrikeThrough = True
             Case IL_CODE
@@ -1300,6 +2063,7 @@ End Sub
 Private Sub BuildTableAt(ByVal doc As Document, ByVal pos As Long, _
                          ByRef data() As String, ByVal rows As Long, ByVal cols As Long)
     Dim r As Range
+    Dim cellRng As Range
     Dim t As Table
     Dim a As Long, b As Long
     Dim restored As String
@@ -1325,7 +2089,7 @@ Private Sub BuildTableAt(ByVal doc As Document, ByVal pos As Long, _
         NumRows:=rows, _
         NumColumns:=cols, _
         DefaultTableBehavior:=wdWord9TableBehavior, _
-        AutoFitBehavior:=wdAutoFitContent)
+        AutoFitBehavior:=wdAutoFitFixed)
 
     For a = 0 To rows - 1
         For b = 0 To cols - 1
@@ -1334,6 +2098,21 @@ Private Sub BuildTableAt(ByVal doc As Document, ByVal pos As Long, _
     Next a
 
     FormatTable t
+
+    For a = 0 To rows - 1
+        For b = 0 To cols - 1
+            If HasInlineMarkers(data(a, b)) Then
+                On Error Resume Next
+                Set cellRng = t.Cell(a + 1, b + 1).Range
+                cellRng.MoveEnd wdCharacter, -1
+                If Err.Number = 0 Then
+                    If cellRng.End > cellRng.Start Then InlinePass cellRng
+                End If
+                Err.Clear
+                On Error GoTo 0
+            End If
+        Next b
+    Next a
     Exit Sub
 
 Fallback:
@@ -1346,8 +2125,14 @@ End Sub
 
 Private Sub FormatTable(ByVal tbl As Table)
     Dim styled As Boolean
+    Dim c As Cell
 
     On Error Resume Next
+
+    If IsRtlText(tbl.Range.Text) Then
+        tbl.TableDirection = wdTableDirectionRtl
+        tbl.Range.ParagraphFormat.ReadingOrder = wdReadingOrderRtl
+    End If
 
     ' "Table Grid" is English-only in most builds; fall back to direct
     ' borders when the localized style name does not resolve.
@@ -1356,15 +2141,21 @@ Private Sub FormatTable(ByVal tbl As Table)
     Err.Clear
 
     If Not styled Then
+        tbl.Borders.Enable = True
+        tbl.Borders.OutsideLineStyle = wdLineStyleSingle
+        tbl.Borders.InsideLineStyle = wdLineStyleSingle
         tbl.Borders(wdBorderTop).LineStyle = wdLineStyleSingle
         tbl.Borders(wdBorderLeft).LineStyle = wdLineStyleSingle
         tbl.Borders(wdBorderBottom).LineStyle = wdLineStyleSingle
         tbl.Borders(wdBorderRight).LineStyle = wdLineStyleSingle
-        tbl.Borders(wdBorderHorizontal).LineStyle = wdLineStyleSingle
-        tbl.Borders(wdBorderVertical).LineStyle = wdLineStyleSingle
+        If tbl.Rows.Count > 1 Then tbl.Borders(wdBorderHorizontal).LineStyle = wdLineStyleSingle
+        If tbl.Columns.Count > 1 Then tbl.Borders(wdBorderVertical).LineStyle = wdLineStyleSingle
     End If
 
+    tbl.Range.Font.Bold = False
+    tbl.Range.Font.BoldBi = False
     tbl.Range.Font.Size = 11
+    tbl.Range.Font.SizeBi = 11
     tbl.Range.ParagraphFormat.SpaceBefore = 2
     tbl.Range.ParagraphFormat.SpaceAfter = 2
     tbl.Range.ParagraphFormat.LeftIndent = 0
@@ -1373,7 +2164,13 @@ Private Sub FormatTable(ByVal tbl As Table)
 
     If tbl.Rows.Count >= 1 Then
         tbl.Rows(1).Range.Font.Bold = True
+        tbl.Rows(1).Range.Font.BoldBi = True
+        tbl.Rows(1).Shading.Texture = wdTextureNone
         tbl.Rows(1).Shading.BackgroundPatternColor = RGB(219, 229, 241)
+        For Each c In tbl.Rows(1).Cells
+            c.Shading.Texture = wdTextureNone
+            c.Shading.BackgroundPatternColor = RGB(219, 229, 241)
+        Next c
         tbl.Rows(1).HeadingFormat = True
     End If
 
@@ -1396,7 +2193,8 @@ End Sub
 
 Private Function CleanParaText(ByVal s As String) As String
     Do While Len(s) > 0
-        If Right$(s, 1) = Chr$(13) Or Right$(s, 1) = Chr$(7) Then
+        If Right$(s, 1) = Chr$(13) Or Right$(s, 1) = Chr$(7) Or _
+           Right$(s, 1) = Chr$(11) Or Right$(s, 1) = Chr$(10) Then
             s = Left$(s, Len(s) - 1)
         Else
             Exit Do
