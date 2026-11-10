@@ -1,8 +1,8 @@
 # Chat Formatter for Word — macOS
 # قالب‌بندی چت برای ورد (مک)
 
-> Paste an answer from an AI chat into Word, right-click it, and it turns into
-> real Word formatting: headings, bold/italic, tables, lists, code blocks.
+> Paste an answer from an AI chat into Word, open the **Add-ins** tab (or **Tools → Macro → FormatChatText**), and it turns into
+> real Word formatting: headings, bold/italic, tables, lists, clean dashes, code blocks.
 
 ---
 
@@ -37,17 +37,13 @@ Double-click **`uninstall.command`**. It removes the template and your settings.
 ## Use it
 
 Copy text from ChatGPT, DeepSeek, Gemini, Claude — any AI chat — paste it into
-Word, select it, and **right-click**. That is the whole workflow.
-
-Right-click works on Word for Mac 16.52 and later. If your Word build does not
-show it, use the macros instead:
+Word, then run **Format Chat Text** from the **Add-ins** tab (or **Tools → Macro → Macros... → FormatChatText**).
 
 | Macro | What it does |
 |---|---|
 | `FormatChatText` | Formats the whole document |
 | `FormatSelection` | Formats only the selection |
-| `ToggleAutoFormat` | Turns the automatic right-click mode on/off |
-| `ShowSettings` | Opens the settings file |
+| `ShowSettings` | Shows the current configuration |
 
 **Undo is one step.** The whole conversion is a single Word undo record, so
 `⌘Z` puts everything back.
@@ -59,13 +55,12 @@ show it, use the macros instead:
 Settings live in `~/.chatformatter/settings.ini`:
 
 ```ini
-AutoFormat = 1
 Tables = 1
 ```
 
-`AutoFormat` controls the right-click entry, `Tables` controls whether
-tab-separated and fenced tables are converted. Both accept `0` or `1`.
-`ShowSettings` opens the file in your default editor.
+`Tables` controls whether tab-separated and pipe tables are converted when
+running `FormatSelection` (`0` or `1`). When running `FormatChatText`, Word
+asks whether to convert tables too.
 
 ---
 
@@ -80,9 +75,10 @@ tab-separated and fenced tables are converted. Both accept `0` or `1`.
 | `[text](url)` | Blue underlined text |
 | `> quote` | Indented quote with a border |
 | `- item`, `* item` | Real bullet list |
-| `1. item` | Real numbered list |
+| `1. item`, `۱. مورد` (or inline `۱. ... ۲. ...`) | Real numbered list (split vertically) |
+| `—`, `——`, `–`, prose `--` | Standard `-` hyphen (outside code & URLs) |
 | Fenced ```` ```tsv ```` blocks, tab-separated rows | Real Word tables |
-| Pipe tables `\| a \| b \|` | Real Word tables |
+| Pipe tables `\| a \| b \|` | Real Word tables (RTL-aware) |
 | Code fences with other languages | Shaded monospace block |
 
 Persian and Arabic text is handled: RTL lists get their indent on the right,
@@ -92,15 +88,13 @@ and headings keep the correct direction.
 
 ## Troubleshooting
 
-**Right-click entry missing.** Macros may be disabled — see Install. Or your
-Word build is older than 16.52; use `FormatChatText`.
+**Add-ins button or macro missing.** Macros may be disabled — see Install.
+Ensure `ChatFormatter.dotm` is in Word's Startup folder and Word was restarted.
 
-**Nothing happens when I right-click.** Automatic mode is off. Run
-`ToggleAutoFormat`, or turn it on with `AutoFormat = 1` in the settings file.
-
-**Tables stay as text.** Set `Tables = 1`, and make sure the rows are
-separated by real **Tab** characters (copy them straight from the chat — do
-not use spaces). Markdown pipe tables do not have this requirement.
+**Tables stay as text.** Choose **Yes** when `FormatChatText` asks whether to
+convert tables, or set `Tables = 1` for `FormatSelection`. For TSV tables, make
+sure rows are separated by real **Tab** characters (not spaces). Markdown pipe
+tables do not have this requirement.
 
 **Word will not load the add-in.** Quit Word completely, run `install.command`
 again, then start Word. Check `~/Library/Group Containers/UBF8T346G9.Office/User Content.localized/Startup.localized/Word/ChatFormatter.dotm`
@@ -132,20 +126,18 @@ English details are in the main `README.md`. فارسی همین راهنما د
 
 ## استفاده
 
-متن را از ChatGPT، DeepSeek، Gemini یا Claude کپی کنید، در Word بچسبانید،
-انتخاب کنید و **راست‌کلیک** کنید. تمام کار همین است.
-
-اگر راست‌کلیک در نسخهٔ Word شما کار نکرد، از ماکرو `FormatChatText` استفاده
-کنید. با یک `⌘Z` همه‌چیز به حالت قبل برمی‌گردد.
+متن را از ChatGPT، DeepSeek، Gemini یا Claude کپی کنید، در Word جای‌گذاری
+کنید و از **تب افزونه‌ها (Add-ins)** گزینهٔ **Format Chat Text** (یا از
+منوی **Tools → Macro → FormatChatText**) را اجرا کنید. با یک `⌘Z` همه‌چیز
+به حالت قبل برمی‌گردد.
 
 ## تنظیمات
 
 فایل `~/.chatformatter/settings.ini`:
 
 ```ini
-AutoFormat = 1
 Tables = 1
 ```
 
-`AutoFormat` حالت خودکار راست‌کلیک را کنترل می‌کند و `Tables` تبدیل جدول‌ها
-را. با ماکرو `ShowSettings` این فایش را باز می‌کنید.
+مقدار `Tables` تبدیل جدول‌ها را هنگام اجرای `FormatSelection` کنترل می‌کند.
+هنگام اجرای `FormatChatText` مستقیماً از شما دربارهٔ تبدیل جدول‌ها سؤال می‌شود.

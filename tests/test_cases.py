@@ -209,7 +209,7 @@ def t_pipe_table_persian_and_prose_guard():
         doc.tables[0],
         [
             ["مؤلفه", "انتخاب", "جزئیات"],
-            ["STT", "Whisper", "آموزش \u2014 تست"],
+            ["STT", "Whisper", "آموزش - تست"],
             ["LLM", "DGX Spark", "بخش\u200cهای متنی"],
         ],
         "pipe table cells parsed, inline/dashes cleaned, separator dropped",
@@ -222,19 +222,23 @@ def t_pipe_table_persian_and_prose_guard():
 def t_double_dash_collapsed():
     src = [
         "# \U0001f4cb سند تحویل پروژه (Handoff) \u2014\u2014 جمع\u200cبندی نهایی",
-        "text -- more and `keep -- raw` and --flag and [link -- text](http://x.y/a--b)",
+        "تک خط تیره \u2014 و نیم\u200cفاصله \u2013 و متن -- بیشتر",
+        "text -- more and `keep -- raw` and `keep \u2014 raw` and --flag and [link -- text](http://x.y/a--b)",
         "پروژه--جمع\u200cبندی",
+        "\u2014",
         "```",
         "code \u2014\u2014 untouched",
         "```",
     ]
     want = [
-        "\U0001f4cb سند تحویل پروژه (Handoff) \u2014 جمع\u200cبندی نهایی",
-        "text \u2014 more and keep -- raw and --flag and link \u2014 text",
-        "پروژه\u2014جمع\u200cبندی",
+        "\U0001f4cb سند تحویل پروژه (Handoff) - جمع\u200cبندی نهایی",
+        "تک خط تیره - و نیم\u200cفاصله - و متن - بیشتر",
+        "text - more and keep -- raw and keep \u2014 raw and --flag and link - text",
+        "پروژه-جمع\u200cبندی",
+        "-",
         "code \u2014\u2014 untouched",
     ]
-    return eq(fmt(src), want, "double/em dashes collapsed outside code and URLs")
+    return eq(fmt(src), want, "Unicode and repeated dashes normalized to ASCII '-' outside code and URLs")
 
 
 @case

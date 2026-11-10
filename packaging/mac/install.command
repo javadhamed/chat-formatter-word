@@ -89,7 +89,7 @@ say "      OK -> $STARTUP/$TEMPLATE"
 # --- default settings -------------------------------------------
 say "[4/4] Writing fresh default settings..."
 mkdir -p "$SETTINGS_DIR" || die "Could not create $SETTINGS_DIR"
-printf 'AutoFormat = 1\nTables = 1\n' > "$SETTINGS" || die "Could not write $SETTINGS"
+printf 'Tables = 1\n' > "$SETTINGS" || die "Could not write $SETTINGS"
 say "      Created $SETTINGS"
 
 say ""
@@ -103,9 +103,8 @@ say ""
 say "  How to use:"
 say "    1. Copy an answer from ChatGPT, DeepSeek, Gemini, ..."
 say "    2. Paste it into Word"
-say "    3. Select the pasted text and RIGHT-CLICK"
+say "    3. Run from the Add-ins toolbar (Format Chat Text) or Tools > Macro > FormatChatText"
 say ""
-say "  Prefer an explicit button?  Tools > Macro > FormatChatText"
-say "  Turn the automatic mode off?  Tools > Macro > ToggleAutoFormat"
+say "  Other macros (Tools > Macro): FormatSelection, ShowSettings"
 
 pause_exit 0

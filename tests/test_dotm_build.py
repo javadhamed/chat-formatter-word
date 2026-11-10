@@ -159,12 +159,21 @@ def verify_dotm(path):
     assert 'CreateObject("WScript.Shell")' not in cf_text
     assert "HKCU\\Software\\ChatFormatter\\" not in cf_text
     assert "IsSetextContinuation(" in cf_text
-    assert 'If InStr(s, "`") > 0 Then LooksLikeAIChat = True' in cf_text
+    for removed_symbol in (
+        "CF_RightClickHandler",
+        "LooksLikeAIChat",
+        "ToggleAutoFormat",
+        "EnsureAppHook",
+        "HasDashRunHint",
+        "AutoFormat",
+    ):
+        assert removed_symbol not in cf_text, f"obsolete {removed_symbol} still in VBA/ChatFormatter"
     for required_symbol in (
         "BK_PIPETABLE",
         "ApplyPipeTable",
         "SplitSequentialNumbered",
         "NormalizeDashes",
+        "CollapseDashesInRange",
         "DigitValue",
         "AppendParaSegments",
         "Font.BoldBi = True",
@@ -176,9 +185,10 @@ def verify_dotm(path):
 
     assert td_text.startswith('Attribute VB_Name = "ThisDocument"\r\n')
     assert "VERSION 1.0 CLASS" not in td_text
-    assert "Private WithEvents mApp As Word.Application" in td_text
-    assert "mApp_WindowBeforeRightClick(ByVal Sel As Selection, Cancel As Boolean)" in td_text
-    assert "Sub WindowBeforeRightClick(" not in td_text
+    for removed_td in ("WithEvents", "WindowBeforeRightClick", "HookApplication", "CF_RightClickHandler"):
+        assert removed_td not in td_text, f"obsolete {removed_td} still in VBA/ThisDocument"
+    assert "Private Sub Document_Open()" in td_text
+    assert "ChatFormatter.AutoExec" in td_text
 
     # Every macro listed in word/vbaData.xml must be a Public Sub in ChatFormatter.
     ns = {"wne": "http://schemas.microsoft.com/office/word/2006/wordml"}
@@ -187,7 +197,15 @@ def verify_dotm(path):
         el.attrib["{http://schemas.microsoft.com/office/word/2006/wordml}name"].split(".")[-1]
         for el in root.findall(".//wne:mcd", ns)
     ]
-    assert macros, "expected macro entries in word/vbaData.xml"
+    assert macros == [
+        "FormatChatText",
+        "FormatSelection",
+        "ShowSettings",
+        "AutoExec",
+        "AutoOpen",
+        "AutoSetup",
+        "RemoveToolbar",
+    ], f"unexpected vbaData.xml macros: {macros}"
     for macro in macros:
         assert re.search(rf"^Public\s+Sub\s+{re.escape(macro)}\b", cf_text, re.M), (
             f"macro {macro} from vbaData.xml not found as Public Sub"
@@ -361,7 +379,19 @@ def test_standalone_installers():
                 assert not os.path.exists(os.path.join(d, "ChatFormatter.dotm"))
 
         with open(os.path.join(old_cfg, "settings.ini"), "r") as f:
-            assert f.read() == "AutoFormat = 1\nTables = 1\n"
+            assert f.read() == "Tables = 1\n"
+
+    # Docs must point both English & Persian users to Add-ins tab (never right-click)
+    with open(os.path.join(ROOT, "README.md"), "r", encoding="utf-8") as f:
+        readme = f.read()
+    assert "Add-ins" in readme and "تب افزونه‌ها" in readme
+    assert "ToggleAutoFormat" not in readme
+    assert "WindowBeforeRightClick" not in readme
+
+    with open(os.path.join(ROOT, "packaging", "mac", "README-mac.md"), "r", encoding="utf-8") as f:
+        readme_mac = f.read()
+    assert "Add-ins" in readme_mac and "تب افزونه‌ها" in readme_mac
+    assert "ToggleAutoFormat" not in readme_mac
 
 
 def test_versions_match():

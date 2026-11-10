@@ -18,11 +18,12 @@
 
 **This repository exists to solve that in seconds.**
 
-Paste an AI answer into Word, select it, **right-click** — and it instantly becomes:
+Paste an AI answer into Word, open the **Add-ins** tab and click **Format Chat Text** — and it instantly becomes:
 - Real Word headings (styles Heading 1–5)
 - Real character formatting (bold, italic, strikethrough, inline code)
 - Real Word tables (Markdown pipe tables AND tab-separated from Excel/Sheets)
-- Real bullet/numbered lists (with RTL support for Persian/Arabic)
+- Real bullet/numbered lists (with RTL support for Persian/Arabic and automatic vertical splitting for inline numbered lists)
+- Clean standard dashes (`—`, `——`, `–`, `--` normalized to `-` outside code blocks)
 - Proper code blocks with monospace font and shading
 - Blockquotes with indentation and border
 - Links as underlined blue text
@@ -40,10 +41,11 @@ Paste an AI answer into Word, select it, **right-click** — and it instantly be
 | `**bold**`, `*italic*`, `~~strike~~` | Real character formatting |
 | `` `inline code` `` | Consolas 10pt, dark red |
 | ```` ```code``` ```` blocks | Shaded monospace paragraphs |
-| `\| a \| b \|` + separator row | Real Word table |
+| `\| a \| b \|` + separator row | Real Word table (RTL-aware) |
 | Tab-separated rows (Excel/Sheets) | Real Word table |
 | `- item`, `* item`, `+ item` | Bulleted paragraphs (RTL aware) |
-| `1. item` | Numbered paragraphs, **numbers preserved** |
+| `1. item`, `۱. مورد` (or inline `۱. ... ۲. ...`) | Numbered paragraphs, **numbers preserved** and aligned vertically |
+| `—`, `——`, `–`, prose `--` | Standard `-` hyphen (outside code & URLs) |
 | `> quote` | Indented italic blockquote with right border |
 | `[label](url)` | Underlined blue text |
 | `---`, `***`, `___` | Removed |
@@ -81,17 +83,17 @@ Both copy `ChatFormatter.dotm` into Word's `STARTUP` folder, so Word loads it as
 
 ### Use
 
-**Automatic (recommended):**
+**From the Add-ins tab (recommended):**
 1. Copy an answer from the AI chat
 2. Paste it into Word
-3. **Select the text, then right-click** — it formats instantly
+3. Open the **Add-ins** tab in the Word ribbon and click **Format Chat Text**
+4. Choose **Yes** to convert Markdown pipe / TSV tables as well, or **No** for text formatting only
 
-**Manual (via `Alt+F8`):**
+**Via the macro list (`Alt+F8` on Windows, `Tools > Macro` on macOS):**
 | Macro | Action |
 |-------|--------|
 | `FormatChatText` | Format entire document (asks: include tables?) |
 | `FormatSelection` | Format only the current selection |
-| `ToggleAutoFormat` | Enable/disable right-click auto-format |
 | `ShowSettings` | Display current configuration |
 
 ---
@@ -99,7 +101,7 @@ Both copy `ChatFormatter.dotm` into Word's `STARTUP` folder, so Word loads it as
 ### Requirements
 
 - Windows or macOS
-- Microsoft Word 2016 or newer (on macOS the right-click entry needs 16.52+)
+- Microsoft Word 2016 or newer
 - **No Python, no .NET, no internet, no admin rights** (unless Word is in a protected path)
 
 ---
@@ -146,7 +148,7 @@ uninstall.bat                        one-click uninstaller (Windows)
 packaging/mac/                       install.command, uninstall.command, README-mac.md
 ChatFormatter.dotm                   compiled template (what Word loads)
 src/ChatFormatter.bas                all formatting logic, one linear pass
-src/ThisDocument.cls                 event handlers for auto-format
+src/ThisDocument.cls                 startup hook for the Add-ins toolbar
 tools/vbabuild.py                    MS-OVBA compressor and CFB writer/reader
 tools/build_dotm.py                  injects src/ into tools/seed.dotm
 tools/build_installers.py            embeds ChatFormatter.dotm into standalone installers
@@ -157,11 +159,9 @@ tests/                               reference model and test suites
 
 ---
 
-### How Automatic Mode Works
+### How the Add-in Loads
 
-The template lives in Word's `STARTUP` folder, so Word loads it as a global add-in on every launch. `ThisDocument` exposes `WindowBeforeRightClick`, which calls `ChatFormatter.CF_RightClickHandler`. That handler runs a cheap heuristic — does the selection contain `**`, `##`, backticks, pipes, or tabs across multiple lines? — and only formats when it looks like AI chat markdown. Right-clicking ordinary prose does nothing.
-
-Turn it off permanently with `Alt+F8` → `ToggleAutoFormat`.
+The template lives in Word's `STARTUP` folder, so Word loads it as a global add-in on every launch. `ThisDocument` runs `ChatFormatter.AutoExec` on startup, which registers the **Format Chat Text** button in the **Add-ins** tab so you can format pasted AI responses cleanly on demand without interfering with normal right-clicks.
 
 ---
 
@@ -191,16 +191,17 @@ MIT. See `LICENSE`.
 
 **این مخزن برای حل همین مشکل در عرض چند ثانیه ساخته شده است.**
 
-یک پاسخ هوش مصنوعی را در ورد پیست کنید، انتخاب کنید، **راست‌کلیک** کنید — و بلافاصله تبدیل می‌شود به:
+یک پاسخ هوش مصنوعی را در ورد پیست کنید، از **تب افزونه‌ها (Add-ins)** روی دکمهٔ **Format Chat Text** کلیک کنید — و بلافاصله تبدیل می‌شود به:
 - تیترهای واقعی ورد (استایل‌های Heading ۱–۵)
-- قالب‌بندی واقعی کاراکتر (پرته، خمیده، خط‌خورده، کد‌درون‌خطی)
-- جداول واقعی ورد (جداول مارک‌داون Pipe **و** جداول Tab-separated از اکسل/شیتز)
-- لیست‌های پرتی/شماره‌دار واقعی (با پشتیبانی RTL برای فارسی/عربی)
+- قالب‌بندی واقعی کاراکتر (پررنگ، خمیده، خط‌خورده، کد درون‌خطی)
+- جداول واقعی ورد (جداول مارک‌داون Pipe **و** جداول Tab-separated از اکسل/شیتز با پشتیبانی RTL)
+- لیست‌های بولت/شماره‌دار واقعی (با پشتیبانی RTL برای فارسی/عربی و شکستن خودکار لیست‌های شماره‌دار متوالی به زیر هم)
+- یکسان‌سازی خط تیره‌های بلند و دوتایی (`—`، `——`، `–`، `--`) به یک `-` استاندارد (خارج از بلوک‌های کد و لینک‌ها)
 - بلوک‌های کد با قلم مونوسپیس و سایه‌دهی
 - نقل‌قول‌ها با تورفتگی و کادر
 - لینک‌ها به صورت متن زیرخط‌دار آبی
 
-**واچنین با `Ctrl+Z`** — کل تبدیل یک رکورد Undo واحد است.
+**واگرد با `Ctrl+Z`** — کل تبدیل یک رکورد Undo واحد است.
 
 ---
 
@@ -210,13 +211,14 @@ MIT. See `LICENSE`.
 |--------|-------|
 | `# Heading` … `##### Heading` | استایل‌های ورد Heading ۱–۵ |
 | متن ساده / زیرخط `===` | Heading ۱ / Heading ۲ (Setext) |
-| `**پرته**`، `*خمیده*`، `~~خط‌خورده~~` | قالب‌بندی واقعی کاراکتر |
-| `` `کد‌درون‌خطی` `` | Consolas ۱۰نقطه، قرمز تیره |
-| ```` ```بلوک‌کد``` ```` | پاراگراف‌های مونوسپیس سایه‌دار |
-| `\| الف \| ب \|` + ردیف جداکننده | جدول واقعی ورد |
+| `**پررنگ**`، `*خمیده*`، `~~خط‌خورده~~` | قالب‌بندی واقعی کاراکتر |
+| `` `کد درون‌خطی` `` | Consolas ۱۰نقطه، قرمز تیره |
+| ```` ```بلوک کد``` ```` | پاراگراف‌های مونوسپیس سایه‌دار |
+| `\| الف \| ب \|` + ردیف جداکننده | جدول واقعی ورد (با جهت RTL و سرستون پررنگ/سایه‌دار) |
 | ردیف‌های جدا شده با Tab (اکسل/شیتز) | جدول واقعی ورد |
-| `- آیتم`، `* آیتم`، `+ آیتم` | پاراگراف‌های پرتی (آگاه به RTL) |
-| `۱. آیتم` | پاراگراف‌های شماره‌دار، **شماره‌ها حفظ می‌شوند** |
+| `- آیتم`، `* آیتم`، `+ آیتم` | پاراگراف‌های بولت‌دار (آگاه به RTL) |
+| `۱. آیتم` یا `۱. ... ۲. ...` | پاراگراف‌های شماره‌دار عمودی، **شماره‌ها حفظ می‌شوند** |
+| `—`، `——`، `–`، `--` متنی | خط تیرهٔ استاندارد `-` (خارج از کد و لینک) |
 | `> نقل‌قول` | بلوک نقل‌قول خمیده تورفتگی‌دار با کادر راست |
 | `[برچسب](آدرس)` | متن زیرخط‌دار آبی |
 | `---`، `***`، `___` | حذف می‌شوند |
@@ -254,18 +256,18 @@ MIT. See `LICENSE`.
 
 ### استفاده
 
-**خودکار (پیشنهادی):**
-۱. یک پاسخ از چت هوش مصنوعی کپی کنید
-۲. در ورد پیست کنید
-۳. **متن را انتخاب کرده و راست‌کلیک کنید** — بلافاصله قالب‌بندی می‌شود
+**از طریق تب افزونه‌ها (Add-ins) — روش اصلی:**
+۱. پاسخ را از چت هوش مصنوعی کپی کنید
+۲. در ورد جای‌گذاری (Paste) کنید
+۳. در نوار بالای ورد به **تب افزونه‌ها (Add-ins)** بروید و روی **Format Chat Text** کلیک کنید
+۴. اگر جداول هم دارید **Yes** و در غیر این صورت **No** را انتخاب کنید
 
-**دستی (از طریق `Alt+F8`):**
+**از طریق فهرست ماکروها (`Alt+F8` در ویندوز، یا `Tools > Macro` در مک):**
 
 | ماکرو | عملکرد |
 |--------|--------|
-| `FormatChatText` | قالب‌بندی کل سند (پرسش: جداول شامل شوند؟) |
-| `FormatSelection` | قالب‌بندی فقط انتخاب فعلی |
-| `ToggleAutoFormat` | فعال/غیرفعال کردن قالب‌بندی خودکار راست‌کلیک |
+| `FormatChatText` | قالب‌بندی کل سند (همراه با پرسش دربارهٔ تبدیل جداول) |
+| `FormatSelection` | قالب‌بندی فقط بخش انتخاب‌شدهٔ فعلی |
 | `ShowSettings` | نمایش تنظیمات فعلی |
 
 ---
@@ -273,7 +275,7 @@ MIT. See `LICENSE`.
 ### پیش‌نیازها
 
 - ویندوز یا مک
-- مایکروسافت ورد ۲۰۱۶ یا جدیدتر (روی مک، راست‌کلیک نیاز به نسخهٔ ۱۶.۵۲ به بعد دارد)
+- مایکروسافت ورد ۲۰۱۶ یا جدیدتر
 - **بدون پایتون، بدون دات‌نت، بدون اینترنت، بدون حق ادمین** (مگر اینکه ورد در مسیر محافظت‌شده باشد)
 
 ---
@@ -320,7 +322,7 @@ uninstall.bat                        حذف‌کننده یک‌کلیک (وین
 packaging/mac/                       install.command، uninstall.command، README-mac.md
 ChatFormatter.dotm                   قالب کامپایل‌شده (چه چیزی ورد بارگذاری می‌کند)
 src/ChatFormatter.bas                کل منطق قالب‌بندی، در یک پاس خطی
-src/ThisDocument.cls                 هندلرهای رویداد برای قالب‌بندی خودکار
+src/ThisDocument.cls                 راه‌اندازی دکمهٔ تب افزونه‌ها هنگام شروع ورد
 tools/vbabuild.py                    فشرده‌ساز MS-OVBA و نویسنده/خواننده CFB
 tools/build_dotm.py                  تزریق src/ به tools/seed.dotm
 tools/build_installers.py            ساخت فایل‌های نصب مستقل از روی ChatFormatter.dotm
@@ -331,11 +333,9 @@ tests/                               مدل مرجع و مجموعه تست‌ه
 
 ---
 
-### نحوه کارکرد حالت خودکار
+### نحوه بارگذاری افزونه
 
-قالب در پوشه `STARTUP` ورد قرار دارد، بنابراین ورد آن را در هر اجرا به عنوان یک add-in سراسری بارگذاری می‌کند. `ThisDocument` رویداد `WindowBeforeRightClick` را افشا می‌کند که `ChatFormatter.CF_RightClickHandler` را صدا می‌زند. این هندلر یک اکتشافی ارزان انجام می‌دهد — آیا انتخاب حاوی `**`، `##`، بک‌تیک، Pipe یا Tab در چند خط است؟ — و فقط وقتی شبیه مارک‌داون چت هوش مصنوعی باشد قالب‌بندی می‌کند. راست‌کلیک روی متن عادی هیچ کاری انجام نمی‌دهد.
-
-برای غیرفعالسازی دائمی: `Alt+F8` → `ToggleAutoFormat`.
+قالب در پوشه `STARTUP` ورد قرار دارد، بنابراین ورد آن را در هر اجرا به عنوان یک add-in سراسری بارگذاری می‌کند. ماژول `ThisDocument` هنگام باز شدن ورد `ChatFormatter.AutoExec` را اجرا می‌کند و دکمهٔ **Format Chat Text** را در **تب افزونه‌ها (Add-ins)** قرار می‌دهد تا بدون تداخل با راست‌کلیک‌های عادی، با یک کلیک کل سند را مرتب کنید.
 
 ---
 
@@ -366,7 +366,7 @@ MIT. فایل `LICENSE` را ببینید.
 
 ? **If you found this project useful, please give it a star!** It helps others discover it and motivates continued development.
 
-**What it does:** A Word add-in that instantly formats AI chat markdown (ChatGPT, Gemini, etc.) into professional Word documents with a single right-click.
+**What it does:** A Word add-in that instantly formats AI chat markdown (ChatGPT, Gemini, etc.) into professional Word documents from the Add-ins tab (**Format Chat Text**).
 **Why it exists:** To eliminate the hours spent manually cleaning up formatting (bold, tables, headings) after copying AI responses into Word.
 
 ? **??? ??? ????? ??????? ???? ???? ????? ?? ?? ????? (Star) ?????!** ??? ??? ?? ?????? ?? ??? ????? ??? ?????? ? ??????? ?????? ????? ?? ????? ???????.
